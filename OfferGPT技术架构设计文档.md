@@ -1,18 +1,18 @@
 # OfferGPT 技术架构设计文档
 
-文档版本：v1.0  
+文档版本：v2.0  
 适用场景：72 小时黑客松开发、比赛 Demo 稳定运行、技术评审答辩  
 产品名称：OfferGPT  
-产品定位：AI Career Growth Simulator，AI 职业成长模拟器  
-核心目标：通过实时英语语音面试、AI 连续追问、数字面试官人格、Interview VAR 回放和 Offer Report，帮助用户提升英语口语、面试表达和求职竞争力。
+产品定位：AI Real-Scene English Speaking Coach，AI 真实场景英语口语陪练  
+核心目标：通过面试、餐厅点餐和商务会议三类真实场景，结合实时英语语音对话、场景角色、轻量纠错、VAR 回放和场景报告，帮助用户提升可迁移的英语口语表达能力。
 
 ## 0. 架构设计摘要
 
-OfferGPT 不是普通英语陪练产品，而是一个围绕“真实求职面试场景”构建的实时 AI Agent 系统。系统把简历、目标岗位 JD、面试官人格、实时语音交互、面试追问、语言能力分析、STAR 结构分析、Offer Score、Interview VAR 和成长路线图串成一个闭环。用户在一次面试中获得的不只是聊天记录，而是一份可解释、可回放、可训练、可持续进化的职业能力画像。
+OfferGPT 不是普通英语陪练产品，而是一个围绕“真实场景对话”构建的实时 AI Agent 系统。系统在 MVP 阶段支持求职面试、餐厅点餐和商务会议三类场景：面试场景保留简历、目标岗位 JD、面试官人格、连续追问、STAR 分析和 Offer Report；点餐与会议场景通过场景角色、子主题、功能句评分和专属报告覆盖日常与商务表达。用户获得的不只是聊天记录，而是一份可解释、可回放、可训练、可持续进化的口语成长画像。
 
-从工程角度看，系统被拆分为七层：Frontend、Gateway、Realtime Service、Agent Layer、LLM Layer、Storage Layer、Monitoring Layer。Frontend 负责简历上传、JD 输入、Persona 选择、实时语音采集、音频播放、VAR 时间轴展示和报告页面。Gateway 负责鉴权、限流、REST API、WebSocket 会话接入和路由。Realtime Service 负责 VAD、ASR、流式文本增量、TTS、音频缓冲、打断控制和端到端延迟控制。Agent Layer 是产品差异化核心，包含 Interview Agent、Persona Agent、Grammar Agent、Pronunciation Agent、STAR Agent、Replay Agent、Offer Agent、Growth Coach Agent 和 Interview Twin Agent。LLM Layer 负责多模型路由、Prompt 模板渲染、函数调用、结构化输出、缓存和降级。Storage Layer 存储用户、简历、岗位、面试会话、时间轴事件、报告、Agent 日志和音频对象。Monitoring Layer 负责日志、指标、链路追踪、模型质量评估和 Demo 值守。
+从工程角度看，系统被拆分为七层：Frontend、Gateway、Realtime Service、Agent Layer、LLM Layer、Storage Layer、Monitoring Layer。Frontend 负责场景选择、子主题选择、简历上传、JD 输入、角色选择、实时语音采集、音频播放、VAR 时间轴展示和报告页面。Gateway 负责鉴权、限流、REST API、WebSocket 会话接入和路由。Realtime Service 负责 VAD、ASR、流式文本增量、TTS、音频缓冲、打断控制和端到端延迟控制。Agent Layer 是产品差异化核心，包含 Scene Router Agent、Conversation Agent、Persona Agent、Grammar Agent、Pronunciation Agent、STAR Agent、Replay Agent、Report Agent、Growth Coach Agent 和 Interview Twin Agent。LLM Layer 负责多模型路由、Prompt 模板渲染、函数调用、结构化输出、缓存和降级。Storage Layer 存储用户、简历、岗位、场景会话、时间轴事件、报告、Agent 日志和音频对象。Monitoring Layer 负责日志、指标、链路追踪、模型质量评估和 Demo 值守。
 
-72 小时黑客松版本应优先完成一条高质量主链路：简历解析、JD 解析、Persona 选择、实时英语语音面试、AI 连续追问、英文纠错、STAR 评分、Offer Report 和 Interview VAR。P2 的 Interview Twin 和成长路线图可以先做轻量版本，以规则加 LLM 结构化总结实现，确保评委能看到未来扩展空间。
+72 小时黑客松版本应优先完成一条高质量多场景主链路：用户先选择面试、点餐或会议场景，再进入对应配置化 Prompt、角色、评分规则和报告模板。面试场景完成简历/JD 解析、Persona 选择、实时英语面试、连续追问、英文纠错、STAR 评分、Offer Report 和 Interview VAR；点餐与会议场景至少完成子主题选择、角色对话、实时轻纠正、场景报告和 VAR 时间轴。P2 的 Interview Twin 和成长路线图可以先做轻量版本，以规则加 LLM 结构化总结实现，确保评委能看到未来扩展空间。
 
 ## 第一部分：系统总体架构
 
@@ -35,11 +35,13 @@ flowchart TB
     User[User Browser / Mobile Web] --> Frontend[Frontend<br/>Next.js App]
 
     subgraph FrontendLayer[Frontend]
+        Frontend --> SceneUI[Scene Selector<br/>Interview / Restaurant / Meeting]
+        Frontend --> TopicUI[Topic & Role Selector]
         Frontend --> UploadUI[Resume Upload UI]
         Frontend --> JDUI[JD Input UI]
         Frontend --> PersonaUI[Persona Selector]
-        Frontend --> VoiceUI[Realtime Voice Interview UI]
-        Frontend --> ReportUI[Offer Report & VAR UI]
+        Frontend --> VoiceUI[Realtime Voice Conversation UI]
+        Frontend --> ReportUI[Scene Report & VAR UI]
     end
 
     Frontend -->|REST API| Gateway[API Gateway<br/>Auth / Rate Limit / Routing]
@@ -65,7 +67,8 @@ flowchart TB
 
     TurnManager --> AgentRouter[Agent Router]
     AgentRouter --> AgentOrchestrator
-    AgentOrchestrator --> InterviewAgent[Interview Agent]
+    AgentOrchestrator --> SceneRouterAgent[Scene Router Agent]
+    AgentOrchestrator --> ConversationAgent[Conversation Agent]
     AgentOrchestrator --> PersonaAgent[Persona Agent]
     AgentOrchestrator --> GrammarAgent[Grammar Agent]
     AgentOrchestrator --> PronunciationAgent[Pronunciation Agent]
@@ -76,7 +79,8 @@ flowchart TB
     AgentOrchestrator --> TwinAgent[Interview Twin Agent]
 
     subgraph AgentLayer[Agent Layer]
-        InterviewAgent
+        SceneRouterAgent
+        ConversationAgent
         PersonaAgent
         GrammarAgent
         PronunciationAgent
@@ -139,19 +143,19 @@ flowchart TB
 
 | 模块 | 核心职责 | 关键输入 | 关键输出 | 72 小时实现建议 |
 |---|---|---|---|---|
-| Frontend | 用户流程、实时音频采集、结果展示 | 简历、JD、麦克风音频、Persona | 面试 UI、报告 UI、VAR UI | 使用 Next.js 快速开发 |
-| Gateway | REST API、WebSocket 接入、鉴权、限流 | HTTP 请求、WS 连接 | 业务路由、会话 ID | 使用 Next.js API Route 或 FastAPI |
+| Frontend | 用户流程、场景选择、实时音频采集、结果展示 | 场景、子主题、角色、简历、JD、麦克风音频 | 场景 UI、实时对话 UI、报告 UI、VAR UI | 使用 Next.js 快速开发 |
+| Gateway | REST API、WebSocket 接入、鉴权、限流、场景路由 | HTTP 请求、WS 连接、scene 参数 | 业务路由、会话 ID、场景配置 | 使用 Next.js API Route 或 FastAPI |
 | Realtime Service | VAD、ASR、TTS、打断、音频缓冲 | PCM/Opus 音频流 | 识别文本、AI 音频流 | 先用 WebSocket + 云 ASR/TTS |
-| Agent Layer | 面试、追问、分析、报告、路线图 | Transcript、Resume、JD、Persona | 问题、评分、建议、事件 | 使用 Python Agent Orchestrator |
+| Agent Layer | 场景路由、角色对话、追问、纠错、分析、报告、路线图 | Transcript、Scene、Topic、Role、Resume、JD、Persona | 回复、评分、建议、事件 | 使用 Python Agent Orchestrator |
 | LLM Layer | 模型路由、Prompt、结构化输出 | Prompt、上下文、工具调用 | 流式回复、JSON 结果 | GPT-4o 主模型，DeepSeek 兜底 |
-| Storage Layer | 存储结构化数据、音频、日志 | 用户数据、面试数据、Agent 日志 | 可查询数据、报告数据 | PostgreSQL + Redis + 对象存储 |
+| Storage Layer | 存储结构化数据、音频、日志 | 用户数据、场景会话、Agent 日志 | 可查询数据、报告数据 | PostgreSQL + Redis + 对象存储 |
 | Monitoring Layer | 可观测、错误告警、质量评估 | 日志、指标、Trace | 面板、告警、质量样本 | OpenTelemetry + Sentry |
 
 ### 1.4 核心数据流
 
-用户上传简历后，Resume Parser 将 PDF、DOCX 或文本转为结构化 JSON，包括教育经历、项目经历、技能栈、工作经历、量化成果和潜在风险。用户输入 JD 后，JD Parser 抽取岗位职责、硬技能、软技能、业务关键词、面试重点和难度等级。系统把 Resume Profile 与 Job Profile 输入 Persona Agent，生成本场面试策略，包括开场问题、追问方向、评分权重和风险点。
+用户进入首页后，先选择场景：求职面试、餐厅点餐或商务会议。Scene Router 根据 `scene`、`topic` 和 `roleMode` 加载对应 Prompt 模板、角色策略、评分权重和报告模板。若用户选择面试场景，Resume Parser 将 PDF、DOCX 或文本转为结构化 JSON，JD Parser 抽取岗位职责、硬技能、软技能、业务关键词、面试重点和难度等级，系统再把 Resume Profile 与 Job Profile 输入 Persona Agent，生成本场面试策略。若用户选择点餐或会议场景，系统跳过简历/JD 解析，直接基于子主题生成对话大纲、功能句目标和场景角色。
 
-实时面试开始后，浏览器通过 WebSocket 发送音频片段。Realtime Service 执行 VAD 和 ASR，Turn Manager 判断用户完成一轮回答后，将文本、语音特征、上下文摘要和 Persona 配置发送给 Agent Router。Interview Agent 决定下一步是追问、切换主题、质疑、鼓励、打断还是收束。Grammar、Pronunciation、STAR 分析可以异步执行，不阻塞主问答链路。Replay Agent 持续生成 Timeline Event。面试结束后，Offer Agent 汇总评分，Growth Coach Agent 生成训练计划，Interview Twin Agent 生成职业画像。
+实时对话开始后，浏览器通过 WebSocket 发送音频片段。Realtime Service 执行 VAD 和 ASR，Turn Manager 判断用户完成一轮表达后，将文本、语音特征、上下文摘要和场景配置发送给 Agent Router。Conversation Agent 根据当前场景决定下一步是追问、引导、轻量纠错、切换子主题、鼓励、打断还是收束。Grammar、Pronunciation、Replay 分析可以异步执行，不阻塞主问答链路；STAR 分析仅在面试场景或行为问题中启用。Replay Agent 持续生成 Timeline Event。会话结束后，Report Agent 根据场景类型生成 Offer Report、点餐场景报告或会议场景报告，Growth Coach Agent 生成训练计划，Interview Twin Agent 仅在面试场景生成职业画像。
 
 ## 第二部分：实时语音链路设计
 
@@ -165,7 +169,7 @@ flowchart LR
     D --> E[Streaming ASR 增量识别]
     E --> F[Turn Manager 判断句子边界]
     F --> G[Agent Router 路由任务]
-    G --> H[Interview Agent 生成面试动作]
+    G --> H[Conversation Agent 生成场景动作]
     H --> I[LLM 流式生成文本]
     I --> J[Streaming TTS 合成音频]
     J --> K[音频缓冲与播放]
@@ -173,21 +177,21 @@ flowchart LR
 
     E --> M[Pronunciation Feature Extractor]
     M --> N[Pronunciation Agent 异步分析]
-    F --> O[Grammar / STAR / VAR 异步分析]
+    F --> O[Grammar / Pronunciation / VAR 异步分析]
 ```
 
 完整流程如下。
 
-1. 用户点击开始面试，Frontend 请求创建 interview session，服务端返回 `interviewId`、`sessionToken`、Persona 配置和 WebSocket 地址。
+1. 用户选择场景、子主题和角色后，Frontend 请求创建 conversation session，服务端返回 `sessionId`、`sessionToken`、场景配置和 WebSocket 地址。面试场景额外绑定 `resumeId`、`jobId` 和 `personaMode`。
 2. 浏览器通过 Web Audio API 获取麦克风权限，以 16kHz 单声道 PCM 或 Opus 分片发送音频，每片建议 20ms 到 100ms。
 3. Realtime Gateway 校验 `sessionToken`，将音频帧写入对应会话的音频队列。
 4. VAD 对音频帧进行语音活动检测，识别开始说话、持续说话、停顿和结束说话。
 5. Streaming ASR 持续输出 partial transcript 和 final transcript。partial transcript 用于前端字幕和打断判断，final transcript 用于 Agent 推理。
-6. Turn Manager 基于静音时长、句子完整性、最大回答时长和 Persona 策略判断一轮回答是否完成。
-7. Agent Router 根据当前面试阶段、用户回答内容、Persona、上下文预算和异步分析结果，选择 Interview Agent 或 Stress Interview 策略。
+6. Turn Manager 基于静音时长、句子完整性、最大回答时长和场景角色策略判断一轮回答是否完成。
+7. Agent Router 根据当前场景、子主题、用户回答内容、角色策略、上下文预算和异步分析结果，选择 Conversation Agent 的下一步动作；面试场景可额外启用 Interview / Stress Interview 策略。
 8. LLM 开始流式生成回复。首 token 到达后立即发送给 TTS，TTS 边合成边下发音频。
 9. Audio Buffer 对 TTS 音频进行 jitter buffer 处理，前端边接收边播放。
-10. 异步分析链路并行执行 Grammar、Pronunciation、STAR、Replay Event，不阻塞主语音回复。
+10. 异步分析链路并行执行 Grammar、Pronunciation、Replay Event，不阻塞主语音回复；STAR 只在面试场景的行为类回答中执行。
 
 ### 2.2 VAD 设计
 
@@ -234,25 +238,27 @@ ASR 输出两类结果：`partialTranscript` 和 `finalTranscript`。partial 用
 
 ### 2.4 Agent Router 设计
 
-Agent Router 不直接生成问题，而是决定本轮应该执行什么面试动作。
+Agent Router 不直接生成问题，而是决定本轮应该执行什么场景动作。
 
 | 输入 | 说明 |
 |---|---|
-| `interviewStage` | opening、resumeDeepDive、behavioral、technical、culture、closing |
-| `personaMode` | founder、productThinker、dataDriven、engineeringLeader、stress |
+| `scene` | interview、restaurant、meeting |
+| `topic` | 面试阶段、点餐子主题或会议议题 |
+| `roleMode` | 面试官人格、服务员语气或会议角色 |
 | `turnTranscript` | 用户本轮回答 |
 | `conversationSummary` | 压缩后的历史上下文 |
-| `resumeProfile` | 简历结构化信息 |
-| `jobProfile` | JD 结构化信息 |
+| `resumeProfile` | 简历结构化信息，只有面试场景必填 |
+| `jobProfile` | JD 结构化信息，只有面试场景必填 |
 | `analysisSignals` | 语法、发音、STAR、置信度、回答长度等信号 |
 | `timeBudget` | 当前面试剩余时间 |
 
 | 输出动作 | 说明 |
 |---|---|
 | `ask_follow_up` | 基于回答继续追问 |
-| `switch_topic` | 切换到下一个能力维度 |
-| `challenge_answer` | 质疑或压测回答 |
-| `interrupt` | Stress Mode 下打断冗长回答 |
+| `switch_topic` | 切换到下一个能力维度或场景子主题 |
+| `light_correct` | 对严重语法或关键词发音问题做一句话轻纠正 |
+| `challenge_answer` | 面试中质疑回答，或会议中提出反方问题 |
+| `interrupt` | Stress Mode 或会议控时下打断冗长表达 |
 | `clarify` | 要求用户澄清 |
 | `summarize_and_close` | 总结并结束 |
 
@@ -326,24 +332,26 @@ OfferGPT 的 Agent 体系采用 Orchestrator + Specialist Agents 架构。Orches
 
 Agent 的设计原则如下。
 
-1. 主链路轻量：Interview Agent 和 Persona Agent 参与实时问答，必须低延迟。
+1. 主链路轻量：Scene Router、Conversation Agent 和 Persona Agent 参与实时问答，必须低延迟。
 2. 分析链路异步：Grammar、Pronunciation、STAR、Replay 等 Agent 不阻塞实时 TTS。
 3. 输出结构化：所有评分和事件输出必须使用 JSON Schema 校验。
 4. 可观测：每次 Agent 调用记录输入摘要、输出、耗时、模型、token、错误和评分。
-5. 可配置：Persona、评分权重、追问策略和报告模板均通过配置驱动。
+5. 可配置：场景、子主题、角色、评分权重、追问策略和报告模板均通过配置驱动。
 
 ### 3.2 Agent 列表
 
 | Agent | 职责 | 输入 | 输出 | 同步性 |
 |---|---|---|---|---|
-| Interview Agent | 控制面试主流程、提问、追问、收束 | 当前回答、上下文、Persona、JD、简历 | 下一句面试官回复、动作类型 | 同步 |
-| Persona Agent | 根据人格配置生成行为策略和 Prompt | Persona Mode、岗位、阶段 | Persona Prompt、追问策略、评分偏好 | 同步预生成 |
+| Scene Router Agent | 根据场景选择加载 Prompt、角色、评分和报告模板 | scene、topic、roleMode、用户目标 | sceneContext、rubric、reportTemplate | 同步预生成 |
+| Conversation Agent | 控制实时场景对话、追问、引导、轻纠正、收束 | 当前回答、上下文、sceneContext、analysisSignals | 下一句 AI 回复、动作类型、下一阶段 | 同步 |
+| Interview Agent | 面试场景专用增强，处理简历/JD 追问和压力面试 | 当前回答、上下文、Persona、JD、简历 | 面试追问、风险点、面试评分信号 | 同步 |
+| Persona Agent | 根据人格或角色配置生成行为策略和 Prompt | scene、roleMode、Persona Mode、岗位、阶段 | Persona Prompt、追问策略、评分偏好 | 同步预生成 |
 | Grammar Agent | 英语语法纠错和表达优化 | turn transcript | 语法错误、改写建议、严重程度 | 异步 |
 | Pronunciation Agent | 发音、流利度、语速、停顿分析 | 音频特征、ASR confidence | 发音评分、问题音素、流利度 | 异步 |
-| STAR Agent | 分析回答是否符合 STAR 结构 | transcript、问题类型 | Situation、Task、Action、Result 完整度 | 异步 |
+| STAR Agent | 分析面试回答是否符合 STAR 结构 | transcript、问题类型 | Situation、Task、Action、Result 完整度 | 异步 |
 | Replay Agent | 生成 VAR 时间轴事件 | transcript、评分信号、音频时间戳 | timeline events、高光片段 | 异步 |
-| Offer Agent | 生成 Offer Report 和 Offer Score | 全量面试数据、各 Agent 评分 | 总分、分项分、证据、建议 | 面试后 |
-| Growth Coach Agent | 生成成长路线图 | 能力差距、目标岗位、时间预算 | 7/14/30 天训练计划 | 面试后 |
+| Report Agent | 生成场景报告、Offer Report 和成长建议 | 全量会话数据、场景评分、各 Agent 信号 | 总分、分项分、证据、建议 | 会话后 |
+| Growth Coach Agent | 生成成长路线图 | 能力差距、目标场景、时间预算 | 7/14/30 天训练计划 | 会话后 |
 | Interview Twin Agent | 生成数字能力分身 | 简历、JD、面试表现、报告 | 职业画像、能力雷达、风险标签 | 面试后 |
 
 ### 3.3 Agent 调用时序图
