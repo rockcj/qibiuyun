@@ -1,6 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
+import { useLocale } from "@/i18n/LocaleContext";
 
 /** Icon mapping – simple emoji fallback for scene icons */
 const SCENE_ICONS: Record<string, string> = {
@@ -24,6 +25,7 @@ interface SceneCardProps {
 
 export default function SceneCard({ scene, index }: SceneCardProps) {
   const router = useRouter();
+  const { t } = useLocale();
 
   const handleClick = () => {
     router.push(`/scenes/${scene.scene}`);
@@ -74,7 +76,7 @@ export default function SceneCard({ scene, index }: SceneCardProps) {
       <div className="mt-6 flex items-center gap-2 text-sm font-medium transition-colors group-hover:opacity-100"
         style={{ color: scene.color }}
       >
-        <span>开始训练</span>
+        <span>{t("scene.startTraining")}</span>
         <svg className="h-4 w-4 transition-transform group-hover:translate-x-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
         </svg>
