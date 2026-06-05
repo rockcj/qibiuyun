@@ -21,6 +21,9 @@ out/
 *.swo
 
 # Env (keep example)
+.env
+.env.*
+!.env.example
 .env.local
 .env.production
 
