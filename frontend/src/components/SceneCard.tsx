@@ -16,6 +16,9 @@ export interface SceneCardData {
   description: string;
   icon: string;
   color: string;
+  enabled?: boolean;
+  releasePriority?: string;
+  disabledReason?: string;
 }
 
 interface SceneCardProps {
@@ -27,6 +30,8 @@ export default function SceneCard({ scene, index }: SceneCardProps) {
   const router = useRouter();
   const { t } = useLocale();
 
+  const isEnabled = scene.enabled !== false;
+
   const handleClick = () => {
     router.push(`/scenes/${scene.scene}`);
   };
@@ -34,7 +39,11 @@ export default function SceneCard({ scene, index }: SceneCardProps) {
   return (
     <button
       onClick={handleClick}
-      className="group relative w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-8 text-left shadow-sm transition-all duration-300 hover:shadow-xl hover:-translate-y-1 hover:border-transparent dark:border-zinc-800 dark:bg-zinc-900"
+      className={`group relative w-full max-w-sm rounded-2xl border border-zinc-200 bg-white p-8 text-left shadow-sm transition-all duration-300 dark:border-zinc-800 dark:bg-zinc-900 ${
+        isEnabled
+          ? "hover:shadow-xl hover:-translate-y-1 hover:border-transparent"
+          : "opacity-80"
+      }`}
       style={{
         animationDelay: `${index * 100}ms`,
         borderColor: "transparent",
@@ -71,6 +80,13 @@ export default function SceneCard({ scene, index }: SceneCardProps) {
       <p className="text-sm leading-relaxed text-zinc-500 dark:text-zinc-400 line-clamp-2">
         {scene.description}
       </p>
+
+      {/* 未启用场景的占位标签 */}
+      {!isEnabled && scene.releasePriority && (
+        <span className="mt-3 inline-block rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-600 dark:bg-amber-900/30 dark:text-amber-300">
+          {scene.releasePriority} · {scene.disabledReason || "即将开放"}
+        </span>
+      )}
 
       {/* CTA */}
       <div className="mt-6 flex items-center gap-2 text-sm font-medium transition-colors group-hover:opacity-100"

@@ -1,16 +1,6 @@
 import { notFound } from "next/navigation";
 import SceneContent from "@/components/SceneContent";
-
-/* ---------- helper ---------- */
-interface SceneFull {
-  scene: string;
-  displayName: string;
-  description: string;
-  topics: { topic: string; displayName: string }[];
-  roleModes: { roleMode: string; displayName: string }[];
-  rubric: string[];
-  requiresResumeJD: boolean;
-}
+import type { SceneFull } from "@/types/api";
 
 async function getScene(name: string): Promise<SceneFull | null> {
   try {
