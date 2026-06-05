@@ -3,11 +3,14 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from config import settings
 from database import init_db
-from routers import scenes, interviews
+from exceptions import ApiError, api_error_handler, http_exception_handler, validation_exception_handler
+from routers import scenes, interviews, resumes, jobs
 from services.cache_service import cache
 from websocket.handler import ws_manager
 
@@ -48,8 +51,15 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 统一错误处理
+app.add_exception_handler(ApiError, api_error_handler)
+app.add_exception_handler(StarletteHTTPException, http_exception_handler)
+app.add_exception_handler(RequestValidationError, validation_exception_handler)
+
 # REST routers
 app.include_router(scenes.router)
+app.include_router(resumes.router)
+app.include_router(jobs.router)
 app.include_router(interviews.router)
 
 

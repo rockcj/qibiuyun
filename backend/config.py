@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     # ---- Server ----
     backend_host: str = "0.0.0.0"
     backend_port: int = 8000
+    ws_base_url: str = "ws://localhost:8000"
     cors_allow_origins: str = "http://localhost:3000"
     session_token_secret: str = "dev-secret-change-me"
     session_ttl_seconds: int = 7200
