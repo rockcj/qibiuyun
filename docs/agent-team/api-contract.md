@@ -2,7 +2,15 @@
 
 ## 文档目标
 
-本文档定义 OfferGPT 前后端协作所需的 REST API 与 WebSocket 消息契约。接口命名以 72 小时 MVP 可落地为优先，业务上支持面试、餐厅点餐和商务会议三类场景。
+本文档定义 OfferGPT 前后端协作所需的 REST API 与 WebSocket 消息契约。接口命名以 72 小时 MVP 可落地为优先，P0 阶段先完整支持面试场景，餐厅点餐和商务会议分别作为 P1/P2 后续模块接入。
+
+## 接口开发优先级
+
+| 优先级 | 场景模块 | 接口范围 | 进入下一阶段条件 |
+|---|---|---|---|
+| P0 | 面试场景 | 场景配置、简历、JD、面试会话、WebSocket、Offer Report、VAR | 面试接口测试全部通过 |
+| P1 | 餐厅点餐 | 点餐配置、点餐会话、点餐报告 | P0 面试接口回归通过 |
+| P2 | 商务会议 | 会议配置、会议会话、会议报告 | P0/P1 接口回归通过 |
 
 ## 通用约定
 
@@ -11,7 +19,7 @@
 | 数据格式 | REST 请求和响应默认使用 JSON |
 | 时间格式 | 使用 ISO 8601 字符串或毫秒时间戳 |
 | ID 命名 | 对外使用 `sessionId`，数据库可沿用 `interviewId` |
-| 场景枚举 | `interview`、`restaurant`、`meeting` |
+| 场景枚举 | P0 启用 `interview`，P1/P2 再启用 `restaurant`、`meeting` |
 | 错误响应 | 必须包含 `errorCode`、`message`、`requestId` |
 | 鉴权 | MVP 可使用临时 `sessionToken`，后续接入用户登录 |
 
@@ -39,21 +47,36 @@ GET /api/scenes
 {
   "scenes": [
     {
-      "scene": "restaurant",
-      "displayName": "餐厅点餐",
+      "scene": "interview",
+      "displayName": "求职面试",
+      "enabled": true,
       "topics": [
         {
-          "topic": "ordering",
-          "displayName": "点餐"
+          "topic": "behavioral",
+          "displayName": "行为面试"
         }
       ],
       "roleModes": [
         {
-          "roleMode": "busyWaiter",
-          "displayName": "忙碌的服务员"
+          "roleMode": "founder",
+          "displayName": "Founder Mode"
         }
       ],
-      "rubric": ["english", "politeness", "functionalPhrases", "taskCompletion"]
+      "rubric": ["english", "logic", "confidence", "star", "technical", "communication"]
+    },
+    {
+      "scene": "restaurant",
+      "displayName": "餐厅点餐",
+      "enabled": false,
+      "releasePriority": "P1",
+      "disabledReason": "P0 阶段先完成面试闭环"
+    },
+    {
+      "scene": "meeting",
+      "displayName": "商务会议",
+      "enabled": false,
+      "releasePriority": "P2",
+      "disabledReason": "P0/P1 稳定后再接入"
     }
   ]
 }
@@ -139,7 +162,7 @@ Content-Type: application/json
 }
 ```
 
-点餐场景请求：
+点餐场景请求（P1 后启用，P0 阶段不得影响面试接口）：
 
 ```json
 {
@@ -159,11 +182,11 @@ Content-Type: application/json
   "sessionId": "iv_123",
   "sessionToken": "signed_session_token",
   "websocketUrl": "wss://api.offergpt.ai/ws/interviews/iv_123",
-  "scene": "restaurant",
-  "topic": "ordering",
+  "scene": "interview",
+  "topic": "behavioral",
   "persona": {
-    "mode": "busyWaiter",
-    "displayName": "Busy Waiter"
+    "mode": "founder",
+    "displayName": "Founder Mode"
   },
   "status": "created"
 }
@@ -180,9 +203,9 @@ GET /api/interviews/{sessionId}
 ```json
 {
   "sessionId": "iv_123",
-  "scene": "restaurant",
-  "topic": "ordering",
-  "roleMode": "busyWaiter",
+  "scene": "interview",
+  "topic": "behavioral",
+  "roleMode": "founder",
   "status": "running",
   "startedAt": "2026-06-05T03:30:00Z",
   "durationSeconds": 180
@@ -222,11 +245,11 @@ GET /api/interviews/{sessionId}/events
       "eventType": "grammarIssue",
       "severity": "medium",
       "title": "严重语法错误",
-      "description": "用户使用了 have did，应改为 have made。",
+      "description": "用户使用了 I have did，应改为 I have done。",
       "startMs": 31020,
       "endMs": 34720,
-      "transcriptSnippet": "I have did a reservation.",
-      "suggestion": "I have made a reservation."
+      "transcriptSnippet": "I have did a project.",
+      "suggestion": "I have done a project."
     }
   ]
 }
@@ -242,23 +265,35 @@ GET /api/interviews/{sessionId}/report
 
 ```json
 {
-  "reportId": "rep_456",
+  "reportId": "rep_123",
   "sessionId": "iv_123",
-  "scene": "restaurant",
-  "scoreName": "Restaurant Practice Score",
-  "sceneScore": 86,
+  "scene": "interview",
+  "scoreName": "Offer Score",
+  "sceneScore": 78,
+  "offerProbability": "mediumHigh",
   "dimensionScores": {
     "english": 82,
-    "politeness": 90,
-    "functionalPhrases": 88,
-    "taskCompletion": 84,
-    "pronunciationFluency": 80
+    "logic": 74,
+    "confidence": 70,
+    "star": 68,
+    "technical": 80,
+    "communication": 77
   },
-  "recommendedExpressions": [
-    "Could I have the steak, please?",
-    "I'm allergic to nuts. Could you make sure there are no nuts in this dish?"
+  "strengths": [
+    {
+      "title": "技术项目表达清晰",
+      "evidenceEventIds": ["evt_010"],
+      "description": "用户能说明项目职责和关键技术选择。"
+    }
   ],
-  "finalRecommendation": "用户可以完成基础点餐流程，下一步建议练习投诉处理。"
+  "risks": [
+    {
+      "title": "STAR 结果描述不足",
+      "evidenceEventIds": ["evt_003"],
+      "suggestion": "每个项目故事最后补充可量化结果。"
+    }
+  ],
+  "finalRecommendation": "具备初筛通过潜力，需要加强 STAR 结果表达。"
 }
 ```
 
@@ -306,7 +341,7 @@ wss://api.offergpt.ai/ws/interviews/{sessionId}?token={sessionToken}
   "turnId": "turn_006",
   "startMs": 31000,
   "endMs": 36500,
-  "finalTranscript": "I would like to order a steak, please."
+  "finalTranscript": "I led the backend design for an AI interview system."
 }
 ```
 
@@ -317,7 +352,7 @@ wss://api.offergpt.ai/ws/interviews/{sessionId}?token={sessionToken}
   "type": "agent.text.delta",
   "sessionId": "iv_123",
   "turnId": "turn_006",
-  "delta": "Sure, how would you like your steak cooked?"
+  "delta": "You mentioned leading the backend design. What specific trade-off did you make?"
 }
 ```
 
@@ -341,9 +376,9 @@ wss://api.offergpt.ai/ws/interviews/{sessionId}?token={sessionToken}
   "sessionId": "iv_123",
   "turnId": "turn_006",
   "severity": "high",
-  "originalText": "I have did a reservation.",
-  "correctedText": "I have made a reservation.",
-  "spokenTip": "Just a quick tip: we say 'I have made a reservation'."
+  "originalText": "I have did a project.",
+  "correctedText": "I have done a project.",
+  "spokenTip": "Just a quick tip: we say 'I have done a project'."
 }
 ```
 
@@ -356,12 +391,12 @@ wss://api.offergpt.ai/ws/interviews/{sessionId}?token={sessionToken}
   "event": {
     "eventId": "evt_010",
     "turnId": "turn_006",
-    "eventType": "highlight",
-    "severity": "low",
-    "title": "礼貌表达正确",
+    "eventType": "starIssue",
+    "severity": "medium",
+    "title": "STAR 结果缺失",
     "startMs": 31000,
     "endMs": 36500,
-    "transcriptSnippet": "Could I have the steak, please?"
+    "transcriptSnippet": "I led the backend design for an AI interview system."
   }
 }
 ```
@@ -391,3 +426,4 @@ wss://api.offergpt.ai/ws/interviews/{sessionId}?token={sessionToken}
 - WebSocket 消息必须包含 `type` 和 `sessionId`。
 - 任何失败响应都必须返回中文 `message`。
 - 每次接口变更必须同步更新本文档。
+- P0 阶段必须优先保证 interview 接口可用，restaurant 和 meeting 未启用时必须返回明确禁用状态。

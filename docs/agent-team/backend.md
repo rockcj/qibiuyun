@@ -2,7 +2,15 @@
 
 ## 文档目标
 
-本文档面向后端 Agent，负责 OfferGPT 的 API、实时语音链路、Agent 编排、数据存储、报告生成和稳定性兜底。后端优先使用 FastAPI + WebSocket + PostgreSQL + Redis 实现，确保 72 小时版本能跑通多场景实时陪练闭环。
+本文档面向后端 Agent，负责 OfferGPT 的 API、实时语音链路、Agent 编排、数据存储、报告生成和稳定性兜底。后端优先使用 FastAPI + WebSocket + PostgreSQL + Redis 实现，P0 阶段必须先跑通面试场景闭环，餐厅点餐和商务会议作为后续模块增量接入。
+
+## 开发优先级
+
+| 优先级 | 场景模块 | 后端目标 | 进入下一阶段条件 |
+|---|---|---|---|
+| P0 | 面试场景 | 完成简历/JD 解析、面试会话、实时问答、面试 Agent、Offer Report 和 VAR | 面试接口、实时链路和报告测试通过 |
+| P1 | 餐厅点餐 | 复用场景会话能力，新增点餐配置、角色 Prompt 和点餐报告 | P0 面试回归测试通过 |
+| P2 | 商务会议 | 复用场景会话能力，新增会议配置、会议角色和会议报告 | P0/P1 回归测试通过 |
 
 ## 后端职责边界
 
@@ -10,7 +18,7 @@
 
 | 模块 | 后端职责 | 输出给前端 |
 |---|---|---|
-| 场景管理 | 加载场景、子主题、角色、评分权重和 Prompt 配置 | 场景配置 JSON |
+| 场景管理 | P0 加载面试场景、Persona、评分权重和 Prompt 配置 | 场景配置 JSON |
 | 简历/JD 解析 | 抽取文本并生成结构化画像 | `resumeId`、`jobId`、解析摘要 |
 | 会话管理 | 创建、恢复、结束训练会话 | `sessionId`、`sessionToken`、状态 |
 | 实时服务 | 接收音频、ASR、Turn 判断、TTS 下发 | 字幕、AI 文本流、AI 音频流 |
@@ -34,12 +42,12 @@
 
 | 模块 | 说明 |
 |---|---|
-| `sceneService` | 管理场景配置、子主题、角色和评分权重 |
+| `sceneService` | P0 管理面试场景、Persona、面试阶段和评分权重 |
 | `resumeService` | 处理简历上传、文本抽取和结构化解析 |
 | `jobService` | 处理 JD 输入、岗位画像和难度判断 |
 | `sessionService` | 创建、查询、结束和恢复会话 |
 | `realtimeService` | 管理 WebSocket、音频帧、ASR、TTS |
-| `agentOrchestrator` | 编排 Scene Router、Conversation、Grammar、Report 等 Agent |
+| `agentOrchestrator` | P0 编排面试相关 Scene Router、Persona、Interview、Grammar、Report 等 Agent |
 | `timelineService` | 生成和查询 VAR 时间轴事件 |
 | `reportService` | 聚合评分信号并生成场景报告 |
 | `monitorService` | 写入 Agent 日志、接口耗时和错误信息 |
@@ -50,10 +58,10 @@
 
 | Agent | 调用时机 | 同步性 |
 |---|---|---|
-| Scene Router Agent | 创建会话时 | 同步 |
-| Persona Agent | 创建会话时 | 同步 |
+| Scene Router Agent | P0 创建面试会话时 | 同步 |
+| Persona Agent | P0 创建面试会话时 | 同步 |
 | Conversation Agent | 每轮用户回答结束后 | 同步 |
-| Interview Agent | 面试场景追问时 | 同步 |
+| Interview Agent | P0 面试场景追问时 | 同步 |
 | Grammar Agent | 每轮回答后 | 异步，严重错误可回传轻纠正 |
 | Pronunciation Agent | 每轮回答后 | 异步 |
 | STAR Agent | 面试行为题回答后 | 异步 |
@@ -88,8 +96,8 @@ WebSocket 下发字幕、文本、音频和事件
 | `users` | 用户基础信息 |
 | `resumes` | 简历原文、文件地址和结构化画像 |
 | `jobs` | JD 原文、岗位画像和难度等级 |
-| `scenePresets` | 场景配置、角色配置和评分规则 |
-| `interviews` | 多场景训练会话，MVP 阶段沿用 interviews 命名 |
+| `scenePresets` | P0 面试 Persona、阶段配置和评分规则，P1/P2 再扩展其他场景 |
+| `interviews` | P0 面试训练会话，后续复用为多场景训练会话 |
 | `timelineEvents` | VAR 时间轴事件 |
 | `reports` | 场景报告、成长计划和数字分身 |
 | `agentLogs` | Agent 输入摘要、输出、模型、耗时和错误 |
@@ -99,7 +107,7 @@ WebSocket 下发字幕、文本、音频和事件
 | Key | 用途 | TTL |
 |---|---|---:|
 | `session:{sessionId}` | 实时会话状态 | 2h |
-| `scene:{scene}:{topic}` | 场景配置缓存 | 24h |
+| `scene:{scene}:{topic}` | P0 面试场景配置缓存 | 24h |
 | `persona:{personaMode}:{jobHash}` | Persona 上下文 | 24h |
 | `jd:{jdHash}` | JD 解析结果 | 7d |
 | `asr:partial:{sessionId}` | 最新字幕 | 5m |
@@ -115,8 +123,9 @@ WebSocket 下发字幕、文本、音频和事件
 
 ## 后端验收标准
 
-- `GET /api/scenes` 可以返回三类场景配置。
-- `POST /api/interviews` 可以创建 interview、restaurant、meeting 三类会话。
+- `GET /api/scenes` 在 P0 阶段至少返回可用的 interview 面试场景配置，restaurant 和 meeting 可返回禁用状态。
+- `POST /api/interviews` 在 P0 阶段必须可以创建 interview 面试会话。
 - WebSocket 能接收 `audio.input` 并返回至少一种字幕或 AI 文本消息。
-- 会话结束后可以生成报告和 VAR 事件。
+- 面试会话结束后可以生成 Offer Report 和 VAR 事件。
 - 关键 Agent 调用必须写入 `agentLogs`，方便答辩展示工程深度。
+- P1/P2 场景接入前，禁止修改导致 P0 面试接口、实时链路或报告不可用。
