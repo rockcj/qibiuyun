@@ -2,6 +2,8 @@
 
 from typing import Optional
 
+from config import settings
+
 # ---------------------------------------------------------------------------
 # Static scene configuration – mirrors the architecture doc's Scene Router output.
 # In production this data lives in the `scene_presets` table.
@@ -89,28 +91,70 @@ SCENES_CONFIG = [
 ]
 
 
+def _is_scene_enabled(scene_name: str) -> bool:
+    """根据环境变量判断场景是否启用。"""
+    if scene_name == "interview":
+        return True
+    if scene_name == "restaurant":
+        return settings.enable_restaurant_scene
+    if scene_name == "meeting":
+        return settings.enable_meeting_scene
+    return False
+
+
+def _scene_release_priority(scene_name: str) -> Optional[str]:
+    """返回场景发布优先级标签。"""
+    if scene_name == "restaurant":
+        return "P1"
+    if scene_name == "meeting":
+        return "P2"
+    return None
+
+
+def _scene_disabled_reason(scene_name: str) -> Optional[str]:
+    """返回场景禁用原因说明。"""
+    if scene_name == "restaurant" and not settings.enable_restaurant_scene:
+        return "P0 阶段先完成面试闭环"
+    if scene_name == "meeting" and not settings.enable_meeting_scene:
+        return "P0/P1 稳定后再接入"
+    return None
+
+
 def get_all_scenes() -> list[dict]:
-    """Return the complete scene configuration list."""
-    return SCENES_CONFIG
+    """Return the complete scene configuration list with enabled flags."""
+    result = []
+    for scene in SCENES_CONFIG:
+        entry = {**scene, "enabled": _is_scene_enabled(scene["scene"])}
+        if not entry["enabled"]:
+            entry["releasePriority"] = _scene_release_priority(scene["scene"])
+            entry["disabledReason"] = _scene_disabled_reason(scene["scene"])
+        result.append(entry)
+    return result
 
 
 def get_scene(scene_name: str) -> Optional[dict]:
     """Return configuration for a single scene."""
     for scene in SCENES_CONFIG:
         if scene["scene"] == scene_name:
-            return scene
+            return {**scene, "enabled": _is_scene_enabled(scene_name)}
     return None
 
 
 def get_scene_list() -> list[dict]:
     """Return a lightweight scene list (for the homepage cards)."""
-    return [
-        {
+    items = []
+    for s in SCENES_CONFIG:
+        enabled = _is_scene_enabled(s["scene"])
+        item = {
             "scene": s["scene"],
             "displayName": s["displayName"],
             "description": s["description"],
             "icon": s["icon"],
             "color": s["color"],
+            "enabled": enabled,
         }
-        for s in SCENES_CONFIG
-    ]
+        if not enabled:
+            item["releasePriority"] = _scene_release_priority(s["scene"])
+            item["disabledReason"] = _scene_disabled_reason(s["scene"])
+        items.append(item)
+    return items
