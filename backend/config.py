@@ -1,39 +1,93 @@
-"""Application configuration loaded from environment variables."""
+"""Application configuration – env vars > root .env.local > backend .env > defaults."""
 
-from pydantic_settings import BaseSettings
+from pathlib import Path
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+ROOT_DIR = Path(__file__).resolve().parent.parent
+
+
+def _env_files():
+    files = []
+    root_local = ROOT_DIR / ".env.local"
+    if root_local.exists():
+        files.append(str(root_local))
+    backend_env = Path(__file__).resolve().parent / ".env"
+    if backend_env.exists():
+        files.append(str(backend_env))
+    return files if files else None
 
 
 class Settings(BaseSettings):
     """OfferGPT backend settings."""
 
-    # Database
+    model_config = SettingsConfigDict(
+        env_file=_env_files(), env_file_encoding="utf-8", extra="ignore"
+    )
+
+    # ---- App ----
+    app_env: str = "development"
+    log_level: str = "INFO"
+    demo_mode_enabled: bool = True
+
+    # ---- Server ----
+    backend_host: str = "0.0.0.0"
+    backend_port: int = 8000
+    cors_allow_origins: str = "http://localhost:3000"
+    session_token_secret: str = "dev-secret-change-me"
+    session_ttl_seconds: int = 7200
+
+    # ---- DB ----
     database_url: str = "sqlite+aiosqlite:///./offergpt.db"
 
-    # Redis
-    redis_url: str = "redis://localhost:6379/0"
-    redis_enabled: bool = False
+    # ---- Redis ----
+    redis_url: str = "redis://localhost:6379/1"
 
-    # LLM API Keys
-    openai_api_key: str = ""
+    # ---- Scene ----
+    default_scene: str = "interview"
+    enable_restaurant_scene: bool = False
+    enable_meeting_scene: bool = False
+    realtime_light_correction_enabled: bool = True
+
+    # ---- LLM ----
+    llm_provider: str = "deepseek"
+    llm_api_base_url: str = "https://api.deepseek.com/anthropic"
+    llm_model: str = "deepseekV4pro"
+    llm_report_model: str = "deepseekV4pro"
+    llm_api_key: str = ""
     deepseek_api_key: str = ""
 
-    # ASR/TTS
+    # ---- ASR/TTS ----
     asr_provider: str = "whisper"
-    tts_provider: str = "edge"
+    asr_model: str = "whisper-1"
+    tts_provider: str = "edgeTts"
+    tts_voice: str = "en-US-JennyNeural"
+    enable_mock_asr: bool = True
+    enable_mock_tts: bool = True
 
-    # Server
-    host: str = "0.0.0.0"
-    port: int = 8000
-    cors_origins: str = "http://localhost:3000"
-    env: str = "development"
-    log_level: str = "info"
-
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
-
+    # ---- Derived (keep old attribute names for compat) ----
     @property
     def cors_origin_list(self) -> list[str]:
-        """Parse comma-separated CORS origins."""
-        return [origin.strip() for origin in self.cors_origins.split(",")]
+        return [o.strip() for o in self.cors_allow_origins.split(",") if o.strip()]
+
+    @property
+    def env(self) -> str:
+        return self.app_env
+
+    @property
+    def host(self) -> str:
+        return self.backend_host
+
+    @property
+    def port(self) -> int:
+        return self.backend_port
+
+    @property
+    def cors_origins(self) -> str:
+        return self.cors_allow_origins
+
+    @property
+    def is_development(self) -> bool:
+        return self.app_env in ("development", "demo")
 
 
 settings = Settings()

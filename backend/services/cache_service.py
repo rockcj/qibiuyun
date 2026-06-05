@@ -43,17 +43,19 @@ class CacheService:
         self._fallback = InMemoryCache()
 
     async def connect(self):
-        """Connect to Redis if enabled, otherwise use in-memory fallback."""
-        if settings.redis_enabled:
-            try:
-                self._redis = aioredis.from_url(settings.redis_url)
-                await self._redis.ping()
-                print(f"[Cache] Redis connected: {settings.redis_url}")
-            except Exception as exc:
-                print(f"[Cache] Redis unavailable ({exc}), using in-memory fallback")
-                self._redis = None
-        else:
-            print("[Cache] Using in-memory fallback")
+        """Connect to Redis if remote URL configured, else in-memory fallback."""
+        # Auto-detect: connect if not localhost
+        is_local = "localhost" in settings.redis_url or "127.0.0.1" in settings.redis_url
+        if is_local and not settings.redis_url.startswith("redis://:"):
+            print("[Cache] Using in-memory fallback (local dev)")
+            return
+        try:
+            self._redis = aioredis.from_url(settings.redis_url, socket_connect_timeout=5)
+            await self._redis.ping()
+            print(f"[Cache] Redis connected: {settings.redis_url}")
+        except Exception as exc:
+            print(f"[Cache] Redis unavailable ({exc}), using fallback")
+            self._redis = None
 
     async def disconnect(self):
         if self._redis:
