@@ -8,8 +8,9 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from database import get_db
-from models.base import Interview
+from models.base import Interview, User
 from services.scene_service import get_scene
+from sqlalchemy import select
 
 router = APIRouter(prefix="/api", tags=["interviews"])
 
@@ -88,22 +89,28 @@ async def create_session(
         "correctionPolicy": scene_config.get("correctionPolicy", {}),
     }
 
+    # Resolve demo user (MVP: single-user mode)
+    result = await db.execute(select(User).where(User.email == "demo@offergpt.local"))
+    demo_user = result.scalar_one_or_none()
+    if demo_user is None:
+        raise HTTPException(status_code=500, detail="Demo user not seeded")
+
     # Create interview record
     interview = Interview(
-        user_id="demo-user",  # MVP: hardcoded demo user
+        user_id=demo_user.id,  # MVP: seeded demo user
         resume_id=req.resumeId,
         job_id=req.jobId,
         scene=req.scene,
         topic=req.topic,
         role_mode=req.roleMode,
         persona_mode=req.personaMode,
-        scene_config=json.dumps(scene_config_snapshot, ensure_ascii=False),
+        scene_config=scene_config_snapshot,
         status="created",
     )
     db.add(interview)
     await db.flush()
 
-    session_id = interview.id
+    session_id = str(interview.id)
     session_token = f"tok_{session_id}"  # MVP: simple token
 
     return SessionResponse(
