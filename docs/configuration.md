@@ -68,7 +68,12 @@
 | 变量名                       | 是否必填  | 示例值                                                    | 说明                          |
 | ------------------------- | ----- | ------------------------------------------------------ | --------------------------- |
 | `DATABASE_JDBC_URL`       | 是     | `jdbc:postgresql://118.145.179.97:5432/offergpt`       | 已连通的服务器 PostgreSQL JDBC 地址 |
-| `DATABASE_URL`            | 是     | `postgresql://118.145.179.97:5432/offergpt`            | Python/FastAPI 兼容连接串；如驱动要求账号密码，可在 `.env.secrets.local` 中覆盖 |
+| `DATABASE_HOST`           | 是     | `118.145.179.97`                                       | PostgreSQL 服务器地址 |
+| `DATABASE_PORT`           | 是     | `5432`                                                 | PostgreSQL 端口 |
+| `DATABASE_NAME`           | 是     | `offergpt`                                             | PostgreSQL 数据库名 |
+| `DATABASE_USER`           | 是     | `offergpt`                                             | PostgreSQL 用户名 |
+| `DATABASE_PASSWORD`       | 是     | 空                                                      | PostgreSQL 密码，不允许提交 |
+| `DATABASE_URL`            | 是     | `postgresql://offergpt:DATABASE_PASSWORD@118.145.179.97:5432/offergpt` | Python/FastAPI 兼容连接串，密码从环境变量注入 |
 | `REDIS_URL`               | 是     | `redis://:password@118.145.179.97:6379/1`              | 服务器 Redis 连接串，必须使用 DB1，DB0 已有数据不可使用 |
 | `REDIS_HOST`              | 是     | `118.145.179.97`                                       | Redis 服务器地址 |
 | `REDIS_PORT`              | 是     | `6379`                                                 | Redis 端口 |

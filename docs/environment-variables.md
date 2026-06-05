@@ -11,7 +11,11 @@
 | 配置项 | 默认值 | 说明 |
 |---|---|---|
 | Database JDBC URL | `jdbc:postgresql://118.145.179.97:5432/offergpt` | 已连通的服务器 PostgreSQL JDBC 地址 |
-| Database URL | `postgresql://118.145.179.97:5432/offergpt` | Python/FastAPI 兼容地址，可在密钥文件中覆盖账号密码版本 |
+| Database Host | `118.145.179.97` | PostgreSQL 服务器地址 |
+| Database Port | `5432` | PostgreSQL 端口 |
+| Database Name | `offergpt` | PostgreSQL 数据库名 |
+| Database User | `offergpt` | PostgreSQL 用户名 |
+| Database URL | `postgresql://offergpt:DATABASE_PASSWORD@118.145.179.97:5432/offergpt` | Python/FastAPI 兼容地址，密码从环境变量注入 |
 | Redis Host | `118.145.179.97` | 使用服务器 Redis |
 | Redis Port | `6379` | Redis 默认端口 |
 | Redis DB | `1` | 固定使用 DB1，DB0 已有数据不可使用 |
@@ -37,7 +41,7 @@ powershell -ExecutionPolicy Bypass -File scripts/setup-env.ps1
 
 | 输入项 | 用途 |
 |---|---|
-| `DATABASE_URL` | 可选；默认使用服务器 PostgreSQL 地址，如需要账号密码则覆盖 |
+| PostgreSQL 密码 | 生成 `DATABASE_PASSWORD` 和 `DATABASE_URL` |
 | Redis 密码 | 生成 `REDIS_PASSWORD` 和 `REDIS_URL` |
 | TOS Access Key ID | 生成 `TOS_ACCESS_KEY_ID` 和 `VOLCENGINE_ACCESS_KEY_ID` |
 | TOS Secret Access Key | 生成 `TOS_SECRET_ACCESS_KEY` 和 `VOLCENGINE_SECRET_ACCESS_KEY` |
@@ -56,8 +60,13 @@ powershell -ExecutionPolicy Bypass -File scripts/setup-env.ps1
 `.env.secrets.local` 格式如下：
 
 ```text
-DATABASE_URL=postgresql://user:password@server-host:5432/offergpt
 DATABASE_JDBC_URL=jdbc:postgresql://118.145.179.97:5432/offergpt
+DATABASE_HOST=118.145.179.97
+DATABASE_PORT=5432
+DATABASE_NAME=offergpt
+DATABASE_USER=offergpt
+DATABASE_PASSWORD=替换为真实 PostgreSQL 密码
+DATABASE_URL=postgresql://offergpt:替换为真实 PostgreSQL 密码@118.145.179.97:5432/offergpt
 REDIS_PASSWORD=替换为真实 Redis 密码
 TOS_ACCESS_KEY_ID=替换为真实 TOS Access Key ID
 TOS_SECRET_ACCESS_KEY=替换为真实 TOS Secret Access Key
@@ -102,6 +111,8 @@ cp .env.example .env.local
 ```text
 DATABASE_URL=
 DATABASE_JDBC_URL=
+DATABASE_USER=
+DATABASE_PASSWORD=
 REDIS_PASSWORD=
 REDIS_URL=
 TOS_ACCESS_KEY_ID=
@@ -118,9 +129,11 @@ SESSION_TOKEN_SECRET=
 配置完成后检查以下事项：
 
 1. `DATABASE_JDBC_URL` 必须是 `jdbc:postgresql://118.145.179.97:5432/offergpt`，除非后续更换数据库。
-2. `REDIS_URL` 末尾必须是 `/1`。
-3. `TOS_ACL` 必须保持 `private`，除非后续明确需要公开静态资源。
-4. `LLM_API_BASE_URL` 必须是 `https://api.deepseek.com/anthropic`。
-5. `LLM_MODEL` 与 `LLM_REPORT_MODEL` 必须是 `deepseekV4pro`。
-6. `.env.local` 不得被提交。
-7. `.env.example` 不得出现真实密钥、密码或 Token。
+2. `DATABASE_USER` 必须是 `offergpt`。
+3. `DATABASE_PASSWORD` 必须只存在于 `.env.local` 或 `.env.secrets.local`。
+4. `REDIS_URL` 末尾必须是 `/1`。
+5. `TOS_ACL` 必须保持 `private`，除非后续明确需要公开静态资源。
+6. `LLM_API_BASE_URL` 必须是 `https://api.deepseek.com/anthropic`。
+7. `LLM_MODEL` 与 `LLM_REPORT_MODEL` 必须是 `deepseekV4pro`。
+8. `.env.local` 不得被提交。
+9. `.env.example` 不得出现真实密钥、密码或 Token。

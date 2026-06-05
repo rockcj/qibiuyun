@@ -99,12 +99,43 @@ Write-Host "If .env.secrets.local exists, it will be loaded first."
 
 $secretValues = Import-SecretFile -SecretFilePath $secretFilePath
 $databaseJdbcUrl = "jdbc:postgresql://118.145.179.97:5432/offergpt"
-$databaseUrl = "postgresql://118.145.179.97:5432/offergpt"
+$databaseHost = "118.145.179.97"
+$databasePort = "5432"
+$databaseName = "offergpt"
+$databaseUser = "offergpt"
 if ($secretValues.ContainsKey("DATABASE_JDBC_URL") -and $secretValues["DATABASE_JDBC_URL"]) {
     $databaseJdbcUrl = $secretValues["DATABASE_JDBC_URL"]
 }
+if ($secretValues.ContainsKey("DATABASE_HOST") -and $secretValues["DATABASE_HOST"]) {
+    $databaseHost = $secretValues["DATABASE_HOST"]
+}
+if ($secretValues.ContainsKey("DATABASE_PORT") -and $secretValues["DATABASE_PORT"]) {
+    $databasePort = $secretValues["DATABASE_PORT"]
+}
+if ($secretValues.ContainsKey("DATABASE_NAME") -and $secretValues["DATABASE_NAME"]) {
+    $databaseName = $secretValues["DATABASE_NAME"]
+}
+if ($secretValues.ContainsKey("DATABASE_USER") -and $secretValues["DATABASE_USER"]) {
+    $databaseUser = $secretValues["DATABASE_USER"]
+}
+$databasePassword = Read-ConfigValue -SecretValues $secretValues -Key "DATABASE_PASSWORD" -Prompt "Enter PostgreSQL password" -IsSecret $true
+$databaseUrl = "postgresql://${databaseUser}:${databasePassword}@${databaseHost}:${databasePort}/${databaseName}"
 if ($secretValues.ContainsKey("DATABASE_URL") -and $secretValues["DATABASE_URL"]) {
     $databaseUrl = $secretValues["DATABASE_URL"]
+}
+$volcengineAccessKeyId = ""
+$volcengineSecretAccessKey = ""
+if ($secretValues.ContainsKey("VOLCENGINE_ACCESS_KEY_ID") -and $secretValues["VOLCENGINE_ACCESS_KEY_ID"]) {
+    $volcengineAccessKeyId = $secretValues["VOLCENGINE_ACCESS_KEY_ID"]
+}
+if ($secretValues.ContainsKey("VOLCENGINE_SECRET_ACCESS_KEY") -and $secretValues["VOLCENGINE_SECRET_ACCESS_KEY"]) {
+    $volcengineSecretAccessKey = $secretValues["VOLCENGINE_SECRET_ACCESS_KEY"]
+}
+if (-not ($secretValues.ContainsKey("TOS_ACCESS_KEY_ID") -and $secretValues["TOS_ACCESS_KEY_ID"]) -and $volcengineAccessKeyId) {
+    $secretValues["TOS_ACCESS_KEY_ID"] = $volcengineAccessKeyId
+}
+if (-not ($secretValues.ContainsKey("TOS_SECRET_ACCESS_KEY") -and $secretValues["TOS_SECRET_ACCESS_KEY"]) -and $volcengineSecretAccessKey) {
+    $secretValues["TOS_SECRET_ACCESS_KEY"] = $volcengineSecretAccessKey
 }
 $redisPassword = Read-ConfigValue -SecretValues $secretValues -Key "REDIS_PASSWORD" -Prompt "Enter Redis password" -IsSecret $true
 $tosAccessKeyId = Read-ConfigValue -SecretValues $secretValues -Key "TOS_ACCESS_KEY_ID" -Prompt "Enter TOS Access Key ID" -IsSecret $true
@@ -139,6 +170,11 @@ REQUEST_TIMEOUT_SECONDS=30
 LOG_LEVEL=INFO
 
 DATABASE_JDBC_URL=$databaseJdbcUrl
+DATABASE_HOST=$databaseHost
+DATABASE_PORT=$databasePort
+DATABASE_NAME=$databaseName
+DATABASE_USER=$databaseUser
+DATABASE_PASSWORD=$databasePassword
 DATABASE_URL=$databaseUrl
 
 REDIS_HOST=118.145.179.97
