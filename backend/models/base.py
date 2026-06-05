@@ -9,11 +9,11 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     String,
     Text,
-    UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, relationship
 
 
@@ -22,7 +22,7 @@ def utcnow():
 
 
 def new_uuid():
-    return str(uuid.uuid4())
+    return uuid.uuid4()
 
 
 class Base(DeclarativeBase):
@@ -30,13 +30,12 @@ class Base(DeclarativeBase):
 
 
 # ---------------------------------------------------------------------------
-# Use JSON (not JSONB) for SQLite compatibility; PostgreSQL JSONB preferred.
-# In production with PostgreSQL, swap JSON → JSONB via Alembic migration.
+# UUID primary keys, JSON columns → JSONB on PostgreSQL.
 # ---------------------------------------------------------------------------
 class User(Base):
     __tablename__ = "users"
 
-    id = Column(String(36), primary_key=True, default=new_uuid)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
     email = Column(String(255), unique=True, nullable=False)
     name = Column(String(100), nullable=True)
     avatar_url = Column(Text, nullable=True)
@@ -55,12 +54,12 @@ class User(Base):
 class Resume(Base):
     __tablename__ = "resumes"
 
-    id = Column(String(36), primary_key=True, default=new_uuid)
-    user_id = Column(String(36), ForeignKey("users.id"), index=True, nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), index=True, nullable=False)
     file_url = Column(Text, nullable=True)
     file_type = Column(String(20), nullable=False)
     raw_text = Column(Text, nullable=True)
-    parsed_profile = Column(String(4096), nullable=False, default="{}")  # JSON string for SQLite compat
+    parsed_profile = Column(JSON, nullable=False, default=dict)
     parse_status = Column(String(30), nullable=False, default="pending")
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
@@ -70,12 +69,12 @@ class Resume(Base):
 class Job(Base):
     __tablename__ = "jobs"
 
-    id = Column(String(36), primary_key=True, default=new_uuid)
-    user_id = Column(String(36), ForeignKey("users.id"), index=True, nullable=False)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), index=True, nullable=False)
     title = Column(String(200), nullable=False)
     company = Column(String(200), nullable=True)
     jd_text = Column(Text, nullable=False)
-    parsed_profile = Column(String(4096), nullable=False, default="{}")
+    parsed_profile = Column(JSON, nullable=False, default=dict)
     difficulty_level = Column(String(30), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
@@ -85,12 +84,12 @@ class Job(Base):
 class ScenePreset(Base):
     __tablename__ = "scene_presets"
 
-    id = Column(String(36), primary_key=True, default=new_uuid)
-    user_id = Column(String(36), ForeignKey("users.id"), nullable=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), nullable=True)
     scene = Column(String(30), index=True, nullable=False)
     topic = Column(String(80), nullable=True)
     role_mode = Column(String(80), nullable=True)
-    scene_config = Column(String(8192), nullable=False, default="{}")
+    scene_config = Column(JSON, nullable=False, default=dict)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     user = relationship("User", back_populates="scene_presets")
@@ -99,20 +98,20 @@ class ScenePreset(Base):
 class Interview(Base):
     __tablename__ = "interviews"
 
-    id = Column(String(36), primary_key=True, default=new_uuid)
-    user_id = Column(String(36), ForeignKey("users.id"), index=True, nullable=False)
-    resume_id = Column(String(36), ForeignKey("resumes.id"), nullable=True)
-    job_id = Column(String(36), ForeignKey("jobs.id"), nullable=True)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    user_id = Column(UUID(as_uuid=True), ForeignKey("users.id"), index=True, nullable=False)
+    resume_id = Column(UUID(as_uuid=True), ForeignKey("resumes.id"), nullable=True)
+    job_id = Column(UUID(as_uuid=True), ForeignKey("jobs.id"), nullable=True)
     scene = Column(String(30), index=True, nullable=False)
     topic = Column(String(80), nullable=True)
     role_mode = Column(String(80), nullable=True)
     persona_mode = Column(String(50), nullable=True)
-    scene_config = Column(String(8192), nullable=True)
+    scene_config = Column(JSON, nullable=True)
     status = Column(String(30), index=True, default="created")
     duration_seconds = Column(Integer, nullable=True)
-    transcript = Column(String(16384), nullable=True)
+    transcript = Column(JSON, nullable=True)
     audio_url = Column(Text, nullable=True)
-    metrics_json = Column(String(4096), nullable=True)
+    metrics_json = Column(JSON, nullable=True)
     started_at = Column(DateTime(timezone=True), nullable=True)
     ended_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -130,9 +129,9 @@ class Interview(Base):
 class TimelineEvent(Base):
     __tablename__ = "timeline_events"
 
-    id = Column(String(36), primary_key=True, default=new_uuid)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
     interview_id = Column(
-        String(36), ForeignKey("interviews.id"), index=True, nullable=False
+        UUID(as_uuid=True), ForeignKey("interviews.id"), index=True, nullable=False
     )
     turn_id = Column(String(80), index=True, nullable=True)
     event_type = Column(String(50), index=True, nullable=False)
@@ -142,7 +141,7 @@ class TimelineEvent(Base):
     start_ms = Column(Integer, nullable=False, default=0)
     end_ms = Column(Integer, nullable=False, default=0)
     transcript_snippet = Column(Text, nullable=True)
-    evidence = Column(String(4096), nullable=True)
+    evidence = Column(JSON, nullable=True)
     suggestion = Column(Text, nullable=True)
     display_priority = Column(Integer, default=0)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
@@ -158,16 +157,16 @@ class TimelineEvent(Base):
 class Report(Base):
     __tablename__ = "reports"
 
-    id = Column(String(36), primary_key=True, default=new_uuid)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
     interview_id = Column(
-        String(36), ForeignKey("interviews.id"), unique=True, nullable=False
+        UUID(as_uuid=True), ForeignKey("interviews.id"), unique=True, nullable=False
     )
     scene_score = Column(Integer, index=True, nullable=True, default=0)
     score_name = Column(String(80), nullable=False)
-    dimension_scores = Column(String(4096), nullable=False, default="{}")
-    report_json = Column(String(16384), nullable=False, default="{}")
-    growth_plan_json = Column(String(8192), nullable=True)
-    twin_profile_json = Column(String(8192), nullable=True)
+    dimension_scores = Column(JSON, nullable=False, default=dict)
+    report_json = Column(JSON, nullable=False, default=dict)
+    growth_plan_json = Column(JSON, nullable=True)
+    twin_profile_json = Column(JSON, nullable=True)
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
 
     interview = relationship("Interview", back_populates="report")
@@ -176,15 +175,15 @@ class Report(Base):
 class AgentLog(Base):
     __tablename__ = "agent_logs"
 
-    id = Column(String(36), primary_key=True, default=new_uuid)
+    id = Column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
     interview_id = Column(
-        String(36), ForeignKey("interviews.id"), index=True, nullable=False
+        UUID(as_uuid=True), ForeignKey("interviews.id"), index=True, nullable=False
     )
     turn_id = Column(String(80), nullable=True)
     agent_name = Column(String(80), index=True, nullable=False)
     model_name = Column(String(80), nullable=True)
-    input_summary = Column(String(4096), nullable=True)
-    output_json = Column(String(8192), nullable=True)
+    input_summary = Column(JSON, nullable=True)
+    output_json = Column(JSON, nullable=True)
     latency_ms = Column(Integer, nullable=True)
     prompt_tokens = Column(Integer, nullable=True)
     completion_tokens = Column(Integer, nullable=True)
