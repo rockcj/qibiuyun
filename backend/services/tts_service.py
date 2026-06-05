@@ -18,6 +18,25 @@ from config import settings
 # 英文分句正则（按 .!? 断句，保留缩写）
 _SENTENCE_PATTERN = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 
+# 过滤 emoji 和非语音字符（EdgeTTS 无法正确合成）
+_EMOJI_PATTERN = re.compile(
+    "["
+    "\U0001F600-\U0001F64F"  # 表情符号
+    "\U0001F300-\U0001F5FF"  # 杂项符号
+    "\U0001F680-\U0001F6FF"  # 交通和地图
+    "\U0001F1E0-\U0001F1FF"  # 国旗
+    "\U00002702-\U000027B0"  # 装饰符号
+    "\U000024C2-\U0001F251"  # 其他
+    "\U0001F900-\U0001F9FF"  # 补充符号
+    "\U0001FA00-\U0001FA6F"  # 象棋符号
+    "\U0001FA70-\U0001FAFF"  # 扩展A
+    "\U00002600-\U000026FF"  # 杂项
+    "\U0000FE00-\U0000FE0F"  # 变体选择器
+    "\U0000200D"              # 零宽连接符
+    "]+",
+    flags=re.UNICODE,
+)
+
 
 class TTSService:
     """语音合成服务 – EdgeTTS 或 Mock 降级。"""
@@ -48,6 +67,11 @@ class TTSService:
 
         for sentence in sentences:
             if not sentence.strip():
+                continue
+
+            # 过滤 emoji，避免 TTS 合成出乱码杂音
+            sentence = _EMOJI_PATTERN.sub("", sentence).strip()
+            if not sentence:
                 continue
 
             if self._use_mock:

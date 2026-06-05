@@ -1,5 +1,14 @@
 """OfferGPT Backend – FastAPI application entry point."""
 
+import os
+import sys
+# Windows GBK 编码修复（必须放在最顶部，在所有 print 之前生效）
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 import asyncio
 import time
 from contextlib import asynccontextmanager

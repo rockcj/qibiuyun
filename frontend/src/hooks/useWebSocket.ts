@@ -5,31 +5,27 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WsServerMessage } from "@/types/api";
 
-export type ConnectionStatus = "disconnected" | "connecting" | "connected";
+/** WebSocket 连接状态枚举 — 与 UI 提示文案一一对应 */
+export type ConnectionStatus =
+  | "disconnected"   // 未连接
+  | "connecting"     // 正在建立 WebSocket 连接
+  | "connected"      // WebSocket 已连接，等待麦克风就绪
+  | "mic_ready"      // 麦克风就绪，可以开始对话
+  | "error";         // 连接失败（WebSocket 错误或麦克风拒绝）
 
 interface UseWebSocketOptions {
-  /** WebSocket 地址 */
   url: string;
-  /** 是否自动连接 */
   autoConnect?: boolean;
-  /** 重连间隔 ms */
   reconnectInterval?: number;
-  /** 最大重连次数 */
   maxReconnects?: number;
-  /** 收到消息回调 */
   onMessage?: (msg: WsServerMessage) => void;
 }
 
 interface UseWebSocketReturn {
-  /** 连接状态 */
   status: ConnectionStatus;
-  /** 发送 JSON 消息 */
   sendMessage: (msg: Record<string, unknown>) => void;
-  /** 手动连接 */
   connect: () => void;
-  /** 手动断开 */
   disconnect: () => void;
-  /** 错误信息 */
   error: string | null;
 }
 
@@ -48,9 +44,11 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCount = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const heartbeatTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
+  // 防 StrictMode 双重调用：正在连接中时跳过第二次 connect()
+  const connectingRef = useRef(false);
 
-  // 清理定时器
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimer.current) {
       clearTimeout(reconnectTimer.current);
@@ -58,12 +56,17 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     }
   }, []);
 
-  // 断开连接
   const disconnect = useCallback(() => {
+    connectingRef.current = false;
     clearReconnectTimer();
     reconnectCount.current = 0;
+    if (heartbeatTimer.current) {
+      clearInterval(heartbeatTimer.current);
+      heartbeatTimer.current = null;
+    }
     if (wsRef.current) {
-      wsRef.current.close();
+      // 设为 1000(normal) 防止触发 reconnect
+      wsRef.current.close(1000);
       wsRef.current = null;
     }
     if (mountedRef.current) {
@@ -71,14 +74,17 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     }
   }, [clearReconnectTimer]);
 
-  // 连接
   const connect = useCallback(() => {
     if (!url) return;
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    // 已在连接中或已连接 → 跳过
+    if (connectingRef.current) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
+
+    connectingRef.current = true;
 
     // 清理旧连接
     if (wsRef.current) {
-      wsRef.current.close();
+      wsRef.current.close(1000);
       wsRef.current = null;
     }
 
@@ -92,21 +98,19 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        connectingRef.current = false;
         if (!mountedRef.current) return;
         setStatus("connected");
         reconnectCount.current = 0;
-        console.log("[WS] Connected:", url);
+        console.log("[WS] Connected");
 
-        // 连接后发送心跳
-        const heartbeat = setInterval(() => {
+        // 心跳
+        if (heartbeatTimer.current) clearInterval(heartbeatTimer.current);
+        heartbeatTimer.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "ping" }));
-          } else {
-            clearInterval(heartbeat);
           }
         }, 15000);
-
-        ws.addEventListener("close", () => clearInterval(heartbeat), { once: true });
       };
 
       ws.onmessage = (event) => {
@@ -115,34 +119,33 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
           const msg = JSON.parse(event.data as string) as WsServerMessage;
           onMessage?.(msg);
         } catch {
-          console.warn("[WS] Failed to parse message:", event.data);
+          console.warn("[WS] Parse error");
         }
       };
 
       ws.onerror = () => {
+        connectingRef.current = false;
         if (!mountedRef.current) return;
+        setStatus("error");
         setError("WebSocket 连接错误");
       };
 
       ws.onclose = (event) => {
+        connectingRef.current = false;
+        if (heartbeatTimer.current) { clearInterval(heartbeatTimer.current); heartbeatTimer.current = null; }
         if (!mountedRef.current) return;
         setStatus("disconnected");
-        console.log("[WS] Disconnected:", event.code, event.reason);
 
-        // 自动重连
-        if (reconnectCount.current < maxReconnects && event.code !== 1000) {
+        // 非正常关闭 → 自动重连
+        if (event.code !== 1000 && reconnectCount.current < maxReconnects) {
           reconnectCount.current += 1;
-          console.log(
-            `[WS] Reconnecting ${reconnectCount.current}/${maxReconnects} in ${reconnectInterval}ms...`
-          );
           reconnectTimer.current = setTimeout(() => {
-            if (mountedRef.current) {
-              connect();
-            }
+            if (mountedRef.current) connect();
           }, reconnectInterval);
         }
       };
     } catch (err) {
+      connectingRef.current = false;
       if (mountedRef.current) {
         setError(`WebSocket 创建失败: ${String(err)}`);
         setStatus("disconnected");
@@ -150,33 +153,32 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     }
   }, [url, reconnectInterval, maxReconnects, onMessage]);
 
-  // 发送消息
   const sendMessage = useCallback(
     (msg: Record<string, unknown>) => {
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         wsRef.current.send(JSON.stringify(msg));
-      } else {
-        console.warn("[WS] Cannot send, not connected");
       }
     },
     []
   );
 
-  // 自动连接
   useEffect(() => {
     mountedRef.current = true;
+    connectingRef.current = false;
     if (autoConnect && url) {
       connect();
     }
     return () => {
       mountedRef.current = false;
+      connectingRef.current = false;
       clearReconnectTimer();
+      if (heartbeatTimer.current) { clearInterval(heartbeatTimer.current); heartbeatTimer.current = null; }
       if (wsRef.current) {
-        wsRef.current.close();
+        wsRef.current.close(1000);
         wsRef.current = null;
       }
     };
-  }, [url, autoConnect, connect, clearReconnectTimer]);
+  }, [url, autoConnect]);  // 去掉了 connect, clearReconnectTimer 依赖，避免每次 render 重建
 
   return { status, sendMessage, connect, disconnect, error };
 }

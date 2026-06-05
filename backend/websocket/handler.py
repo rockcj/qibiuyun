@@ -20,7 +20,15 @@ from config import settings
 from services.asr_service import EnergyVAD, asr_service
 from services.cache_service import cache
 from services.conversation_service import conversation_service
+from services.realtime.asr_filter import asr_filter
 from services.tts_service import tts_service
+
+
+# ---------------------------------------------------------------------------
+# 会话不活动超时配置
+# ---------------------------------------------------------------------------
+_INACTIVITY_PROMPT_SEC = 30      # 连续 30 秒无有效输入 → 发送 "Are you still there?"
+_INACTIVITY_CLOSE_SEC = 50       # 连续 50 秒无响应 → 自动结束会话
 
 
 # ---------------------------------------------------------------------------
@@ -34,11 +42,14 @@ class SessionState:
         self.scene_config = scene_config or {}
         self.connected_at = time.time()
 
-        # VAD（500ms 静音判定 turn 结束，比 700ms 更灵敏）
-        self.vad = EnergyVAD(silence_threshold_ms=500)
+        # VAD：1200ms 静音判定 turn 结束 + 300ms 最小语音防止瞬时噪音
+        self.vad = EnergyVAD(
+            silence_threshold_ms=1200,
+            speech_start_frames=10,  # 10 帧 × 30ms = 300ms 最小语音
+        )
         self.audio_buffer: bytearray = bytearray()
 
-        # 对话
+        # 对话：最多保留最近 6 轮 (12 条消息)
         self.history: list[dict] = []  # [{"role": "user", "content": "..."}, ...]
         self.system_prompt: str = ""
         self.turn_count: int = 0
@@ -50,12 +61,17 @@ class SessionState:
         # 指标
         self.message_count: int = 0
         self.last_activity: float = time.time()
+        self.last_user_text: Optional[str] = None  # 上一次用户发言，用于去重
+        self.last_user_text_time: float = 0  # 上次有效发言时间戳
+
+        # 不活动超时追踪
+        self._inactivity_prompt_sent: bool = False  # 是否已发送 "Are you still there?"
 
     def add_to_history(self, role: str, content: str) -> None:
         self.history.append({"role": role, "content": content})
-        # 最多保留 10 轮 (20 条消息)
-        if len(self.history) > 20:
-            self.history = self.history[-20:]
+        # 最多保留 6 轮 (12 条消息)，避免上下文过长
+        if len(self.history) > 12:
+            self.history = self.history[-12:]
 
     def to_dict(self) -> dict:
         return {
@@ -141,8 +157,9 @@ class ConnectionManager:
             return await self._handle_finish(session_id, state, message)
 
         elif msg_type == "ping":
-            # 心跳时也检查积压音频
+            # 心跳时检查积压音频 + 不活动超时
             await self._maybe_trigger_turn(session_id, state)
+            await self.check_inactivity(session_id)
             await self.send_message(session_id, {"type": "pong", "sessionId": session_id})
             return {"status": "ok"}
 
@@ -168,20 +185,50 @@ class ConnectionManager:
         if not pcm_bytes:
             return {"error": "Invalid audio payload"}
 
-        # 全部缓存
-        state.audio_buffer.extend(pcm_bytes)
+        # VAD 处理
+        is_speech, turn_complete = state.vad.process(pcm_bytes)
+
         state.last_activity = time.time()
+
+        # 只有语音帧才缓冲（过滤静音噪音）
+        if is_speech:
+            state.audio_buffer.extend(pcm_bytes)
 
         buf_ms = len(state.audio_buffer) / 32
         if seq % 10 == 1:
             print(f"[WS] buffering #{seq} total={buf_ms:.0f}ms {session_id[:8]}")
 
-        # 累积超过 1.5 秒自动触发（简化版，不依赖 VAD 能量检测）
-        if buf_ms > 1500 and not state.is_processing:
+        # 静音超时重置：连续 30 秒无有效 turn 自动清空缓冲区（防止噪声累积）
+        idle_since_last_turn = time.time() - state.last_user_text_time
+        if state.last_user_text_time > 0 and idle_since_last_turn > 30:
+            if len(state.audio_buffer) > 0:
+                print(f"[WS] Silence timeout ({idle_since_last_turn:.0f}s), flushing buffer {session_id[:8]}")
+                state.audio_buffer = bytearray()
+                state.vad.reset()
+
+        # VAD 静音检测：静音 500ms → turn_complete=True → 立即触发
+        # 最大 5 秒强制触发（防止一直说话不触发）
+        if turn_complete and len(state.audio_buffer) > 0 and not state.is_processing:
             dur_sec = len(state.audio_buffer) / 32000
-            print(f"[WS] TURN {session_id[:8]}: {dur_sec:.1f}s audio")
+            # 至少 1.2 秒有效语音才触发（过滤短语气词如 "Yes" 和瞬间噪音）
+            if dur_sec >= 1.2:
+                print(f"[WS] TURN {session_id[:8]}: {dur_sec:.1f}s (silence detected)")
+                audio_data = bytes(state.audio_buffer)
+                state.audio_buffer = bytearray()
+                state.vad.reset()
+                asyncio.create_task(self._process_audio_turn(session_id, state, audio_data))
+            else:
+                # 太短，清空丢弃
+                state.audio_buffer = bytearray()
+                state.vad.reset()
+
+        elif buf_ms > 15000 and not state.is_processing:
+            # 说了超 15 秒还不停，强制触发（兜底）
+            dur_sec = len(state.audio_buffer) / 32000
+            print(f"[WS] TURN MAX {session_id[:8]}: {dur_sec:.1f}s")
             audio_data = bytes(state.audio_buffer)
             state.audio_buffer = bytearray()
+            state.vad.reset()
             asyncio.create_task(self._process_audio_turn(session_id, state, audio_data))
 
         return {"ack": "audio.received"}
@@ -208,7 +255,7 @@ class ConnectionManager:
         try:
             # 1. ASR 转录
             print(f"[WS] ASR transcribing {len(audio_data)/32000:.1f}s audio {session_id[:8]}...")
-            user_text = await asr_service.transcribe(audio_data)
+            user_text, confidence = await asr_service.transcribe(audio_data)
 
             if user_text is None:
                 if asr_service._use_mock:
@@ -220,7 +267,8 @@ class ConnectionManager:
                     })
                 else:
                     # 模型正常但没识别出文字（噪音/静音/非人声）
-                    print(f"[WS] ASR no text {session_id[:8]} — model OK, audio may be silence")
+                    reason = f"confidence={confidence:.2f}" if confidence > 0 else "no text"
+                    print(f"[WS] ASR no text {session_id[:8]} — {reason}")
                     await self.send_message(session_id, {
                         "type": "asr.no_result",
                         "sessionId": session_id,
@@ -229,16 +277,55 @@ class ConnectionManager:
                 state.is_processing = False
                 return
 
-            print(f"[WS] ASR result {session_id[:8]}: \"{user_text[:80]}\"")
+            print(f"[WS] ASR result {session_id[:8]}: \"{user_text[:80]}\" conf={confidence:.2f}")
+
+            # ASR 置信度 + 多层文本有效性校验（防误唤醒）
+            valid, reason = asr_filter.check(
+                user_text,
+                confidence=confidence,
+                last_text=state.last_user_text,
+                last_text_time=state.last_user_text_time,
+            )
+            if not valid:
+                print(f"[WS] ASR filtered {session_id[:8]} ({reason}): \"{user_text[:80]}\"")
+                await self.send_message(session_id, {
+                    "type": "asr.no_result",
+                    "sessionId": session_id,
+                    "message": "未检测到有效语音，请重试",
+                })
+                state.is_processing = False
+                return
+
+            # 记录本轮用户文本（用于下轮去重 + 重置不活动计时器）
+            state.last_user_text = user_text
+            state.last_user_text_time = time.time()
+            state._inactivity_prompt_sent = False
 
             # 发送最终识别结果
             state.turn_count += 1
             turn_id = f"turn_{state.turn_count:03d}"
+
+            # 模拟流式字幕：逐词发送 partial，再发 final
+            words = user_text.split()
+            partial = ""
+            for i, word in enumerate(words):
+                partial += (" " if partial else "") + word
+                # 每隔 1-2 个词发一次，不要太频繁
+                if i % 2 == 0 or i == len(words) - 1:
+                    await self.send_message(session_id, {
+                        "type": "asr.partial",
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "partialTranscript": partial,
+                    })
+                    await asyncio.sleep(0.05)  # 模拟流式延迟
+
             await self.send_message(session_id, {
                 "type": "asr.final",
                 "sessionId": session_id,
                 "turnId": turn_id,
                 "finalTranscript": user_text,
+                "confidence": confidence,
             })
 
             # 2. LLM + TTS 管线
@@ -265,6 +352,22 @@ class ConnectionManager:
         if not user_text:
             return {"error": "Empty text"}
 
+        # 文本有效性校验（文本输入置信度=1.0，跳过置信度检查）
+        valid, reason = asr_filter.check(
+            user_text,
+            confidence=1.0,
+            last_text=state.last_user_text,
+            last_text_time=state.last_user_text_time,
+        )
+        if not valid:
+            print(f"[WS] Text filtered {session_id[:8]} ({reason}): \"{user_text}\"")
+            return {"ack": "text.skipped", "message": "无效输入，请重试"}
+
+        # 更新有效发言时间（重置不活动计时器）
+        state.last_user_text = user_text
+        state.last_user_text_time = time.time()
+        state._inactivity_prompt_sent = False  # 有有效输入，重置提示标记
+
         if state.is_processing:
             # 排队等待：上一轮完成后自动处理
             state.pending_text = user_text
@@ -274,12 +377,13 @@ class ConnectionManager:
         state.turn_count += 1
         turn_id = f"turn_{state.turn_count:03d}"
 
-        # 发送确认（模拟 ASR final）
+        # 发送确认（模拟 ASR final，文本输入置信度=1.0）
         await self.send_message(session_id, {
             "type": "asr.final",
             "sessionId": session_id,
             "turnId": turn_id,
             "finalTranscript": user_text,
+            "confidence": 1.0,
         })
 
         # 进入管线（异步，不阻塞接收循环）
@@ -376,6 +480,7 @@ class ConnectionManager:
                     "sessionId": session_id,
                     "turnId": new_turn_id,
                     "finalTranscript": pending,
+                    "confidence": 1.0,
                 })
                 await self._run_conversation_pipeline(
                     session_id, state, pending, new_turn_id
@@ -385,12 +490,40 @@ class ConnectionManager:
 
         except Exception as exc:
             print(f"[WS] Pipeline error: {exc}")
+            # LLM 失败兜底：发送友好的回落回复
+            fallback_text = "I'm sorry, could you repeat that? I didn't quite catch what you said."
             await self.send_message(session_id, {
-                "type": "error",
+                "type": "agent.text.delta",
                 "sessionId": session_id,
-                "message": f"对话处理失败: {str(exc)}",
+                "turnId": turn_id,
+                "delta": fallback_text,
             })
-            state.is_processing = False
+            await self.send_message(session_id, {
+                "type": "agent.text.done",
+                "sessionId": session_id,
+                "turnId": turn_id,
+            })
+            # 仍然更新历史，保持上下文连续性
+            state.add_to_history("user", user_text)
+            state.add_to_history("assistant", fallback_text)
+            # 处理排队中的文本
+            if state.pending_text:
+                pending = state.pending_text
+                state.pending_text = None
+                state.turn_count += 1
+                new_turn_id = f"turn_{state.turn_count:03d}"
+                await self.send_message(session_id, {
+                    "type": "asr.final",
+                    "sessionId": session_id,
+                    "turnId": new_turn_id,
+                    "finalTranscript": pending,
+                    "confidence": 1.0,
+                })
+                await self._run_conversation_pipeline(
+                    session_id, state, pending, new_turn_id
+                )
+            else:
+                state.is_processing = False
 
     async def _stream_tts(
         self, session_id: str, state: SessionState, text: str, turn_id: str
@@ -453,6 +586,51 @@ class ConnectionManager:
         except Exception:
             await self.disconnect(session_id)
             return False
+
+    # ------------------------------------------------------------------
+    # 会话不活动超时 — 自动检测并提示/结束
+    # ------------------------------------------------------------------
+    async def check_inactivity(self, session_id: str) -> None:
+        """检查会话是否长时间无有效输入。
+
+        规则：
+        - 30 秒无有效输入 → 发送 "Are you still there?"（仅一次）
+        - 再过 20 秒仍无响应 → 自动结束会话
+        """
+        state = self._states.get(session_id)
+        if state is None or state.is_processing:
+            return
+
+        idle_sec = time.time() - max(state.last_user_text_time, state.connected_at)
+
+        if idle_sec >= _INACTIVITY_CLOSE_SEC and state._inactivity_prompt_sent:
+            # 已发送提示但用户仍未响应 → 结束会话
+            print(f"[WS] Session auto-end due to {idle_sec:.0f}s inactivity: {session_id[:8]}")
+            await self.send_message(session_id, {
+                "type": "control.finish",
+                "sessionId": session_id,
+                "reason": "inactivity",
+                "reportStatus": "generating",
+            })
+            await self._save_session_state(state)
+            await self.disconnect(session_id)
+            return
+
+        if idle_sec >= _INACTIVITY_PROMPT_SEC and not state._inactivity_prompt_sent:
+            # 30 秒无输入 → 发送提醒
+            print(f"[WS] Sending inactivity prompt after {idle_sec:.0f}s: {session_id[:8]}")
+            state._inactivity_prompt_sent = True
+            await self.send_message(session_id, {
+                "type": "agent.text.delta",
+                "sessionId": session_id,
+                "turnId": "inactivity_prompt",
+                "delta": " Are you still there? I haven't heard from you for a while.",
+            })
+            await self.send_message(session_id, {
+                "type": "agent.text.done",
+                "sessionId": session_id,
+                "turnId": "inactivity_prompt",
+            })
 
     # ------------------------------------------------------------------
     # 状态持久化

@@ -9,15 +9,17 @@
 
 import json
 import re
+import sys
 from typing import Any, AsyncGenerator, Optional
+sys.stdout.reconfigure(encoding="utf-8", errors="replace") if hasattr(sys.stdout, "reconfigure") else None
 
 import httpx
 
 from config import settings
 
 
-# 会话级对话历史最大轮数
-_MAX_HISTORY_TURNS = 5
+# 会话级对话历史最大轮数（用户+AI 各算 1 条，共 12 条消息）
+_MAX_HISTORY_TURNS = 6
 
 
 # 通用对话 System Prompt 模板
@@ -151,10 +153,10 @@ class ConversationService:
         }
         payload = {
             "model": self._model,
-            "max_tokens": 512,
+            "max_tokens": 256,
             "messages": messages,
             "stream": True,
-            "temperature": 0.8,
+            "temperature": 0.7,
         }
 
         full_text = ""

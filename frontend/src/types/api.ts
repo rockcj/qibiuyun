@@ -136,6 +136,8 @@ export interface WsAsrFinal {
   sessionId: string;
   turnId: string;
   finalTranscript: string;
+  /** 置信度 0-1（Whisper no_speech_prob + avg_logprob 综合），文本输入固定为 1.0 */
+  confidence: number;
 }
 
 /** AI 文本流 */
@@ -202,9 +204,17 @@ export interface WsPong {
   sessionId: string;
 }
 
+/** ASR 无结果 */
+export interface WsAsrNoResult {
+  type: "asr.no_result";
+  sessionId: string;
+  message: string;
+}
+
 /** 所有下行 WebSocket 消息联合类型 */
 export type WsServerMessage =
   | WsAsrPartial
+  | WsAsrNoResult
   | WsAsrFinal
   | WsAgentTextDelta
   | WsAgentTextDone
@@ -217,6 +227,7 @@ export type WsServerMessage =
 
 /** 对话轮次记录 */
 export interface TurnRecord {
+  id: string;  // 稳定唯一 key，避免 React re-render 抖动
   turnId: string;
   userText: string;
   aiText: string;
