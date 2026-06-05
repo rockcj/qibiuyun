@@ -15,6 +15,7 @@ node_modules/
 out/
 
 # IDE
+.cursor/
 .idea/
 .vscode/
 *.swp
