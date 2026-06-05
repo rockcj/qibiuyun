@@ -65,5 +65,5 @@ qibiuyun/
 - **后端**：FastAPI + SQLAlchemy + SQLite/PostgreSQL
 - **实时通信**：WebSocket
 - **缓存**：Redis（可选，开发用内存缓存）
-- **LLM**：GPT-4o + DeepSeek（待接入）
-- **ASR/TTS**：Whisper + EdgeTTS（待接入）
+- **LLM**：DeepSeek V4 Pro（流式对话）
+- **ASR/TTS**：本地 Whisper + EdgeTTS（免费方案已接入）

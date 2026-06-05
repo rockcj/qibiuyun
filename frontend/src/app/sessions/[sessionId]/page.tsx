@@ -1,76 +1,77 @@
 "use client";
 
-import Link from "next/link";
-import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
-import { useLocale } from "@/i18n/LocaleContext";
+import { useParams } from "next/navigation";
+import dynamic from "next/dynamic";
 import type { CreateSessionResponse } from "@/types/api";
 
-/** 实时对话页占位 – Step 3 将实现完整语音链路 */
+/** 动态导入 VoiceSessionPanel（避免 SSR 时加载音频 API） */
+const VoiceSessionPanel = dynamic(
+  () => import("@/components/VoiceSessionPanel"),
+  {
+    ssr: false,
+    loading: () => (
+      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
+        <div className="text-center">
+          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+          <p className="text-sm text-zinc-500">加载语音会话…</p>
+        </div>
+      </div>
+    ),
+  }
+);
+
+/** 实时对话页 — WebSocket 语音交互 */
 export default function SessionPage() {
-  const { t } = useLocale();
   const params = useParams();
   const sessionId = params.sessionId as string;
   const [session, setSession] = useState<CreateSessionResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // 从 sessionStorage 恢复会话信息
     const raw = sessionStorage.getItem(`session:${sessionId}`);
     if (raw) {
       try {
-        setSession(JSON.parse(raw));
+        const data = JSON.parse(raw) as CreateSessionResponse;
+        setSession(data);
       } catch {
-        /* 忽略解析错误 */
+        setError("无法解析会话信息，请返回首页重新创建");
       }
+    } else {
+      setError("未找到会话信息，请返回首页创建新会话");
     }
   }, [sessionId]);
 
-  return (
-    <div className="flex min-h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
-      <header className="border-b border-zinc-200 bg-white/80 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/80">
-        <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-6">
-          <Link
-            href="/"
-            className="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-white transition-colors"
-          >
-            {t("scene.backHome")}
-          </Link>
-          <span className="text-xs text-zinc-400">
-            {t("session.id")}: {sessionId.slice(0, 8)}…
-          </span>
-        </div>
-      </header>
-
-      <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-12 text-center">
-        <div className="mx-auto max-w-lg rounded-2xl border border-zinc-200 bg-white p-10 dark:border-zinc-800 dark:bg-zinc-900">
-          <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-indigo-100 text-2xl dark:bg-indigo-900/30">
-            🎙️
+  if (error) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
+        <div className="text-center">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100 text-2xl dark:bg-red-900/30">
+            ⚠️
           </div>
-          <h1 className="text-2xl font-bold text-zinc-900 dark:text-white">
-            {t("session.created")}
-          </h1>
-          <p className="mt-3 text-sm text-zinc-500">{t("session.placeholder")}</p>
-
-          {session && (
-            <div className="mt-6 space-y-2 text-left text-sm text-zinc-600 dark:text-zinc-400">
-              <p>
-                <span className="font-medium">{t("session.scene")}:</span> {session.scene}
-              </p>
-              <p>
-                <span className="font-medium">{t("session.topic")}:</span> {session.topic}
-              </p>
-              {session.persona && (
-                <p>
-                  <span className="font-medium">{t("session.persona")}:</span>{" "}
-                  {session.persona.displayName}
-                </p>
-              )}
-              <p className="break-all text-xs text-zinc-400">
-                WebSocket: {session.websocketUrl}
-              </p>
-            </div>
-          )}
+          <p className="text-sm text-zinc-600 dark:text-zinc-400">{error}</p>
+          <a
+            href="/"
+            className="mt-4 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-500"
+          >
+            返回首页
+          </a>
         </div>
-      </main>
-    </div>
-  );
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
+        <div className="text-center">
+          <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+          <p className="text-sm text-zinc-500">加载会话…</p>
+        </div>
+      </div>
+    );
+  }
+
+  return <VoiceSessionPanel session={session} />;
 }

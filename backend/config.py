@@ -7,13 +7,14 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 
 
 def _env_files():
+    """返回环境变量文件列表，后者优先覆盖前者。"""
     files = []
-    root_local = ROOT_DIR / ".env.local"
-    if root_local.exists():
-        files.append(str(root_local))
     backend_env = Path(__file__).resolve().parent / ".env"
     if backend_env.exists():
         files.append(str(backend_env))
+    root_local = ROOT_DIR / ".env.local"
+    if root_local.exists():
+        files.append(str(root_local))
     return files if files else None
 
 
@@ -52,18 +53,20 @@ class Settings(BaseSettings):
     # ---- LLM ----
     llm_provider: str = "deepseek"
     llm_api_base_url: str = "https://api.deepseek.com/anthropic"
-    llm_model: str = "deepseekV4pro"
-    llm_report_model: str = "deepseekV4pro"
+    llm_model: str = "deepseek-v4-pro"
+    llm_report_model: str = "deepseek-v4-pro"
     llm_api_key: str = ""
     deepseek_api_key: str = ""
 
     # ---- ASR/TTS ----
     asr_provider: str = "whisper"
+    asr_api_base_url: str = ""
     asr_model: str = "whisper-1"
+    openai_api_key: str = ""
     tts_provider: str = "edgeTts"
     tts_voice: str = "en-US-JennyNeural"
-    enable_mock_asr: bool = True
-    enable_mock_tts: bool = True
+    enable_mock_asr: bool = False
+    enable_mock_tts: bool = False
 
     # ---- Derived (keep old attribute names for compat) ----
     @property
