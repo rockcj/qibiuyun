@@ -243,6 +243,13 @@ export interface WsAsrNoResult {
   reason?: string;
 }
 
+/** 对话阶段（轮流对话状态机） */
+export interface WsTurnPhase {
+  type: "turn.phase";
+  sessionId: string;
+  phase: "listening" | "user_turn" | "ai_speaking";
+}
+
 /** 所有下行 WebSocket 消息联合类型 */
 export type WsServerMessage =
   | WsAsrPartial
@@ -257,6 +264,7 @@ export type WsServerMessage =
   | WsAnalysisCounter
   | WsControlFinish
   | WsAsrUnavailable
+  | WsTurnPhase
   | WsError
   | WsPong;
 
@@ -289,12 +297,28 @@ export interface CorrectionRecord {
   transcript?: string;
 }
 
+/** 对话 transcript 单条（用于报告页回放） */
+export interface TranscriptTurn {
+  turnId: string;
+  role: "user" | "assistant";
+  text: string;
+  startMs: number;
+  endMs: number;
+  /** 用户轮次 WAV 回放 API 路径 */
+  audioUrl?: string;
+  audioStorageKey?: string;
+  audioStorageProvider?: string;
+}
+
 /** 课后分析汇总（GET /api/interviews/{id}/analysis） */
 export interface SessionAnalysisResponse {
   sessionId: string;
   pronunciation: PronunciationRecord[];
   corrections: CorrectionRecord[];
   fillerCounts: Record<string, number>;
+  transcriptTurns?: TranscriptTurn[];
+  /** 整场会话合并录音回放 API 路径 */
+  fullAudioUrl?: string;
 }
 
 /** 场景报告（GET /api/interviews/{id}/report） */

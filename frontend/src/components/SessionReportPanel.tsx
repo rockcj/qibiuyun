@@ -10,6 +10,7 @@ import type {
 } from "@/types/api";
 import RadarChart from "./RadarChart";
 import TimelineViewer from "./TimelineViewer";
+import TranscriptReplayPanel from "./TranscriptReplayPanel";
 
 interface SessionReportPanelProps {
   sessionId: string;
@@ -17,6 +18,7 @@ interface SessionReportPanelProps {
   report: SessionReportResponse | null;
   timelineEvents: SessionEventsResponse | null;
   reportStatus: "loading" | "generating" | "ready" | "error";
+  highlightTurnId?: string | null;
   onTimelineEventClick?: (event: TimelineEventItem) => void;
 }
 
@@ -38,10 +40,12 @@ export default function SessionReportPanel({
   report,
   timelineEvents,
   reportStatus,
+  highlightTurnId,
   onTimelineEventClick,
 }: SessionReportPanelProps) {
   const { t } = useLocale();
 
+  const transcriptTurns = analysis.transcriptTurns ?? [];
   const totalFillers = Object.values(analysis.fillerCounts).reduce((a, b) => a + b, 0);
   const avgWpm =
     analysis.pronunciation.length > 0
@@ -52,10 +56,14 @@ export default function SessionReportPanel({
       : "—";
   const totalPauses = analysis.pronunciation.reduce((sum, p) => sum + p.pauseCount, 0);
 
-  const hasData =
+  const hasAnalysisDetail =
     analysis.pronunciation.length > 0 ||
     analysis.corrections.length > 0 ||
     totalFillers > 0;
+  const hasTranscript = transcriptTurns.length > 0;
+  const hasTimeline = (timelineEvents?.events.length ?? 0) > 0;
+  const hasReport = reportStatus === "ready" && report != null;
+  const showEmptyHint = !hasAnalysisDetail && !hasTranscript && !hasTimeline && !hasReport;
 
   return (
     <div className="min-h-screen bg-zinc-50 dark:bg-zinc-950">
@@ -162,6 +170,36 @@ export default function SessionReportPanel({
           </section>
         )}
 
+        {/* 语气分析概览 */}
+        {!showEmptyHint && (
+          <section className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+              <p className="text-xs text-zinc-400">{t("report.avgWpm")}</p>
+              <p className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">{avgWpm}</p>
+            </div>
+            <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+              <p className="text-xs text-zinc-400">{t("report.totalPauses")}</p>
+              <p className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">{totalPauses}</p>
+            </div>
+            <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+              <p className="text-xs text-zinc-400">{t("report.correctionCount")}</p>
+              <p className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+                {analysis.corrections.length}
+              </p>
+            </div>
+            <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+              <p className="text-xs text-zinc-400">{t("report.fillerTotal")}</p>
+              <p className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">{totalFillers}</p>
+            </div>
+          </section>
+        )}
+
+        {showEmptyHint && (
+          <div className="mt-8 rounded-xl border border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
+            <p className="text-sm text-zinc-500">{t("report.noData")}</p>
+          </div>
+        )}
+
         {/* 证据列表 */}
         {report?.evidenceList && report.evidenceList.length > 0 && (
           <section className="mt-8">
@@ -192,32 +230,21 @@ export default function SessionReportPanel({
           </section>
         )}
 
-        {/* 概览卡片 */}
-        <section className="mt-6 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-400">{t("report.avgWpm")}</p>
-            <p className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">{avgWpm}</p>
-          </div>
-          <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-400">{t("report.totalPauses")}</p>
-            <p className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">{totalPauses}</p>
-          </div>
-          <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-400">{t("report.correctionCount")}</p>
-            <p className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">
-              {analysis.corrections.length}
-            </p>
-          </div>
-          <div className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-xs text-zinc-400">{t("report.fillerTotal")}</p>
-            <p className="mt-1 text-2xl font-bold text-zinc-900 dark:text-zinc-100">{totalFillers}</p>
-          </div>
-        </section>
-
-        {!hasData && (
-          <div className="mt-8 rounded-xl border border-zinc-200 bg-white p-8 text-center dark:border-zinc-800 dark:bg-zinc-900">
-            <p className="text-sm text-zinc-500">{t("report.noData")}</p>
-          </div>
+        {/* 对话回放 */}
+        {(hasTranscript || reportStatus !== "loading") && (
+          <section className="mt-8">
+            <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">
+              {t("report.transcriptSection")}
+            </h2>
+            <div className="mt-3">
+              <TranscriptReplayPanel
+                turns={transcriptTurns}
+                highlightTurnId={highlightTurnId}
+                fullAudioUrl={analysis.fullAudioUrl}
+                t={t as (key: string) => string}
+              />
+            </div>
+          </section>
         )}
 
         {/* 语气词统计 */}

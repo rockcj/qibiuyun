@@ -32,6 +32,11 @@ async def _load(session_id: str) -> dict:
     return {"corrections": [], "fillerCounts": {}, "pronunciation": []}
 
 
+async def load(session_id: str) -> dict:
+    """公开读取接口，始终返回完整结构。"""
+    return await _load(session_id)
+
+
 async def _save(session_id: str, data: dict) -> None:
     """写入 cache，TTL 与会话一致。"""
     await cache.set(
@@ -65,7 +70,7 @@ async def append_pronunciation(session_id: str, record: dict) -> None:
 
 
 async def get_summary(session_id: str) -> Optional[dict]:
-    """获取会话分析汇总，无数据时返回 None。"""
+    """获取会话分析汇总，无任何记录时返回 None。"""
     data = await _load(session_id)
     if not data["corrections"] and not data["fillerCounts"] and not data["pronunciation"]:
         return None

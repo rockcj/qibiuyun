@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocale } from "@/i18n/LocaleContext";
+import PasswordInput from "@/components/PasswordInput";
 
 export default function RegisterForm() {
   const { t } = useLocale();
@@ -95,15 +96,15 @@ export default function RegisterForm() {
         >
           {t("auth.login.password")}
         </label>
-        <input
+        <PasswordInput
           id="reg-password"
-          type="password"
           required
           minLength={6}
           value={password}
-          onChange={(e) => setPassword(e.target.value)}
+          onChange={setPassword}
           placeholder={t("auth.register.passwordPlaceholder")}
-          className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 placeholder-zinc-400 shadow-sm transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white dark:placeholder-zinc-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/30"
+          showLabel={t("auth.password.show")}
+          hideLabel={t("auth.password.hide")}
         />
       </div>
 
@@ -115,14 +116,14 @@ export default function RegisterForm() {
         >
           {t("auth.register.confirmPassword")}
         </label>
-        <input
+        <PasswordInput
           id="reg-confirm"
-          type="password"
           required
           value={confirmPassword}
-          onChange={(e) => setConfirmPassword(e.target.value)}
+          onChange={setConfirmPassword}
           placeholder="••••••"
-          className="w-full rounded-xl border border-zinc-300 bg-white px-4 py-3 text-sm text-zinc-900 placeholder-zinc-400 shadow-sm transition focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-white dark:placeholder-zinc-500 dark:focus:border-indigo-500 dark:focus:ring-indigo-900/30"
+          showLabel={t("auth.password.show")}
+          hideLabel={t("auth.password.hide")}
         />
       </div>
 

@@ -29,7 +29,7 @@ class ReportService:
             "reportId": f"rep_{session_id}",
             "sessionId": session_id,
             "scene": scene,
-            "scoreName": "Offer Score",
+            "scoreName": "Offer 评分",
             "sceneScore": scene_score,
             "dimensionScores": dimension_scores,
             "finalRecommendation": recommendation,

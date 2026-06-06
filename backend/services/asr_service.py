@@ -28,7 +28,9 @@ class EnergyVAD:
         speech_start_frames: int = 10,  # 10 帧 × 30ms = 300ms 最小语音，防瞬时噪音
     ):
         self.sample_rate = sample_rate
+        self.frame_ms = frame_ms
         self.frame_size = int(sample_rate * frame_ms / 1000)
+        self._silence_threshold_ms = silence_threshold_ms
         self.silence_frames = int(silence_threshold_ms / frame_ms)
         self.speech_start_frames = speech_start_frames
 
@@ -106,6 +108,17 @@ class EnergyVAD:
 
         return is_speech, turn_complete
 
+    def set_silence_threshold_ms(self, silence_threshold_ms: int) -> None:
+        """运行时调整静音判定阈值（长发言时放宽句中停顿）。"""
+        if silence_threshold_ms == self._silence_threshold_ms:
+            return
+        self._silence_threshold_ms = silence_threshold_ms
+        self.silence_frames = max(1, int(silence_threshold_ms / self.frame_ms))
+
+    @property
+    def silence_threshold_ms(self) -> int:
+        return self._silence_threshold_ms
+
     def reset(self) -> None:
         self._silence_count = 0
         self._speech_count = 0
@@ -115,6 +128,11 @@ class EnergyVAD:
     @property
     def is_speaking(self) -> bool:
         return self._is_speaking
+
+    @property
+    def speech_started(self) -> bool:
+        """当前轮次是否已开始采集（含句末静音尾音）。"""
+        return self._speech_started
 
 
 # ---------------------------------------------------------------------------

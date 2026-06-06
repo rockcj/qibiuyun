@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends
+from fastapi.responses import Response
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -19,6 +20,12 @@ from exceptions import ApiError
 from models.base import Interview, Job, Report, Resume, TimelineEvent, User
 from services.report_service import report_service
 from services.scene_service import get_scene
+from services.session_persist_service import (
+    build_analysis_response,
+    enrich_analysis_from_timeline,
+    flush_session_data,
+)
+from services.storage_service import storage_service
 
 
 def _utcnow():
@@ -205,6 +212,14 @@ async def _get_interview_with_report(
     return result.scalar_one_or_none()
 
 
+def _normalize_score_name(name: str, scene: str) -> str:
+    """将英文评分名称映射为中文展示名。"""
+    if name in ("Offer Score", "Scene Score"):
+        mapping = {"interview": "Offer 评分", "restaurant": "点餐评分", "meeting": "会议评分"}
+        return mapping.get(scene, "场景评分")
+    return name or "场景评分"
+
+
 def _build_report_response(report: Report, session_id: str, scene: str) -> dict:
     """从 Report ORM 对象构建 API 响应。"""
     report_json = report.report_json or {}
@@ -224,7 +239,7 @@ def _build_report_response(report: Report, session_id: str, scene: str) -> dict:
         "reportId": f"rep_{session_id}",
         "sessionId": session_id,
         "scene": scene,
-        "scoreName": report.score_name,
+        "scoreName": _normalize_score_name(report.score_name, scene),
         "sceneScore": report.scene_score or 0,
         "dimensionScores": report.dimension_scores or {},
         "finalRecommendation": report_json.get("finalRecommendation", ""),
@@ -372,12 +387,118 @@ async def finish_session(session_id: str, db: AsyncSession = Depends(get_db)):
         interview.status = "completed"
         interview.ended_at = _utcnow()
 
+    # 结束时会话分析写入 DB，确保报告页能读到 WPM/纠正/语气词
+    await flush_session_data(session_id)
+
     if interview.report is not None:
         return {"sessionId": session_id, "status": "completed", "reportStatus": "ready",
                 "sceneScore": interview.report.scene_score or 0}
 
     asyncio.create_task(_generate_report_background(session_id, str(interview.id)))
     return {"sessionId": session_id, "status": "completed", "reportStatus": "generating"}
+
+
+@router.get("/interviews/{session_id}/analysis")
+async def get_session_analysis(session_id: str, db: AsyncSession = Depends(get_db)):
+    """获取课后发音/语法/语气词分析汇总及 transcript 回放数据。"""
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
+
+    interview = await db.get(Interview, sid)
+    if interview is None:
+        raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
+
+    # 加载时间轴（用于旧数据补全）
+    events_result = await db.execute(
+        select(TimelineEvent).where(TimelineEvent.interview_id == sid)
+    )
+    timeline_rows = events_result.scalars().all()
+
+    def _finalize(metrics, transcript):
+        resp = build_analysis_response(
+            session_id,
+            metrics,
+            transcript,
+            full_audio_url=interview.audio_url,
+        )
+        return enrich_analysis_from_timeline(resp, timeline_rows)
+
+    # 优先读 DB 持久化数据
+    if interview.metrics_json:
+        return _finalize(interview.metrics_json, interview.transcript)
+
+    # 回落到 cache（会话刚结束、尚未 flush 时）
+    from services.realtime import analysis_store
+
+    cached = await analysis_store.load(session_id)
+    if cached["corrections"] or cached["fillerCounts"] or cached["pronunciation"]:
+        return _finalize(cached, interview.transcript)
+
+    return _finalize(None, interview.transcript)
+
+
+def _find_user_turn_audio(transcript: Optional[dict], turn_id: str) -> Optional[dict]:
+    """从 transcript 中查找用户轮次的音频存储信息。"""
+    if not isinstance(transcript, dict):
+        return None
+    for turn in transcript.get("turns", []) or []:
+        if turn.get("turnId") == turn_id and turn.get("role") == "user":
+            return turn
+    return None
+
+
+@router.get("/interviews/{session_id}/replay/full")
+async def replay_full_session_audio(session_id: str, db: AsyncSession = Depends(get_db)):
+    """回放整场会话合并录音（WAV）。"""
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
+
+    interview = await db.get(Interview, sid)
+    if interview is None:
+        raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
+
+    transcript = interview.transcript if isinstance(interview.transcript, dict) else {}
+    storage_key = transcript.get("fullAudioStorageKey")
+    provider = transcript.get("fullAudioStorageProvider", "local")
+
+    wav_bytes = await storage_service.read_full_session_audio(session_id, storage_key, provider)
+    if not wav_bytes:
+        raise ApiError("AUDIO_NOT_FOUND", "整场录音尚未生成或已过期", 404)
+
+    return Response(content=wav_bytes, media_type="audio/wav")
+
+
+@router.get("/interviews/{session_id}/replay/{turn_id}")
+async def replay_turn_audio(
+    session_id: str, turn_id: str, db: AsyncSession = Depends(get_db)
+):
+    """回放单轮用户发言录音（WAV）。"""
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
+
+    interview = await db.get(Interview, sid)
+    if interview is None:
+        raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
+
+    turn = _find_user_turn_audio(interview.transcript, turn_id)
+    if turn is None:
+        raise ApiError("TURN_NOT_FOUND", "未找到该轮次的用户录音", 404)
+
+    storage_key = turn.get("audioStorageKey", "")
+    provider = turn.get("audioStorageProvider", "local")
+    wav_bytes = await storage_service.read_turn_audio(
+        session_id, turn_id, storage_key, provider
+    )
+    if not wav_bytes:
+        raise ApiError("AUDIO_NOT_FOUND", "该轮录音尚未生成或已过期", 404)
+
+    return Response(content=wav_bytes, media_type="audio/wav")
 
 
 @router.get("/interviews/{session_id}/events")

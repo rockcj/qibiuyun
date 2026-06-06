@@ -26,6 +26,7 @@ from services.realtime.grammar_agent import grammar_agent
 from services.realtime.pronunciation_agent import pronunciation_agent
 from services.realtime import analysis_store
 from services.tts_service import tts_service
+from services.storage_service import storage_service
 
 
 # 句末标点分句（用于 LLM 流式输出时增量 TTS，仅整句切分避免重复朗读）
@@ -67,7 +68,7 @@ class SessionState:
         self.scene_config = scene_config or {}
         self.connected_at = time.time()
 
-        # VAD：默认 700ms 静音判定 turn 结束，更快响应
+        # VAD：短句 0.5s 静音结束；长发言动态放宽
         self.vad = EnergyVAD(
             silence_threshold_ms=settings.vad_silence_ms,
             speech_start_frames=settings.vad_speech_start_frames,
@@ -91,6 +92,8 @@ class SessionState:
         # 最后一次有效交互（用户发言或 AI 播报完成），用于不活动超时
         self.last_interaction_time: float = self.connected_at
         self.is_tts_active: bool = False  # 是否正在下发 TTS 音频
+        # 对话阶段：listening=可录音 user_turn=用户轮处理中 ai_speaking=AI 播报中
+        self.turn_phase: str = "listening"
 
         # 不活动超时追踪
         self._inactivity_prompt_sent: bool = False  # 是否已发送 "Are you still there?"
@@ -102,16 +105,79 @@ class SessionState:
         )
         # 语气词累计计数
         self.filler_counts: dict[str, int] = {}
+        # 会话 transcript（用于报告页回放）
+        self.transcript_turns: list[dict] = []
+        # 整场用户发言 PCM 拼接（用于完整回放上传 TOS）
+        self.session_recording_pcm: bytearray = bytearray()
+        self.full_audio_url: Optional[str] = None
+        self.full_audio_storage_key: Optional[str] = None
+        self.full_audio_storage_provider: Optional[str] = None
+        # 当前轮次起始时间（毫秒，相对会话开始）
+        self.current_turn_start_ms: Optional[int] = None
+        # 轮次结束确认任务（防句中停顿误触发）
+        self._turn_finalize_task: Optional[asyncio.Task] = None
+        # 句末尾音采集截止时间（毫秒级短窗口，避免无限累积环境噪声）
+        self._tail_capture_until: float = 0.0
         # 最近一次检测到语音能量的时间（用于区分「久未对话」与「正在重新开口」）
         self.last_audio_speech_time: float = 0.0
         # 静音检测延迟任务（debounce）
         self._silence_check_task: Optional[asyncio.Task] = None
+        # 已达 max 上限时只打一次日志，避免刷屏
+        self._max_split_logged: bool = False
+
+    def effective_vad_silence_ms(self) -> int:
+        """缓冲较长时放宽句中停顿判定，支持长段回答。"""
+        buf_ms = len(self.audio_buffer) / 32
+        if buf_ms >= settings.vad_long_utterance_threshold_ms:
+            return settings.vad_long_utterance_silence_ms
+        return settings.vad_silence_ms
+
+    def accepts_user_audio(self) -> bool:
+        """是否处于可接收用户语音的状态（严格轮流对话）。"""
+        return (
+            self.turn_phase == "listening"
+            and not self.is_processing
+            and not self.is_tts_active
+        )
 
     def add_to_history(self, role: str, content: str) -> None:
         self.history.append({"role": role, "content": content})
         # 最多保留 6 轮 (12 条消息)，避免上下文过长
         if len(self.history) > 12:
             self.history = self.history[-12:]
+
+    def append_transcript_turn(
+        self,
+        turn_id: str,
+        role: str,
+        text: str,
+        *,
+        audio_url: Optional[str] = None,
+        audio_storage_key: Optional[str] = None,
+        audio_storage_provider: Optional[str] = None,
+        start_ms: Optional[int] = None,
+        end_ms: Optional[int] = None,
+    ) -> None:
+        """记录一轮对话，含可选音频回放地址。"""
+        if not text.strip() and not audio_url:
+            return
+        now_ms = int((time.time() - self.connected_at) * 1000)
+        turn_start = start_ms if start_ms is not None else now_ms
+        turn_end = end_ms if end_ms is not None else turn_start + max(1000, len(text.split()) * 250)
+        entry = {
+            "turnId": turn_id,
+            "role": role,
+            "text": text.strip(),
+            "startMs": turn_start,
+            "endMs": turn_end,
+        }
+        if audio_url:
+            entry["audioUrl"] = audio_url
+        if audio_storage_key:
+            entry["audioStorageKey"] = audio_storage_key
+        if audio_storage_provider:
+            entry["audioStorageProvider"] = audio_storage_provider
+        self.transcript_turns.append(entry)
 
     def to_dict(self) -> dict:
         return {
@@ -136,18 +202,37 @@ class ConnectionManager:
     # 连接生命周期
     # ------------------------------------------------------------------
     async def connect(self, websocket: WebSocket, session_id: str) -> None:
+        # 同一会话的新连接到来时，先关闭旧连接，避免多 handler 竞态
+        old_ws = self._connections.get(session_id)
+        if old_ws is not None and old_ws is not websocket:
+            try:
+                await old_ws.close(code=1000, reason="replaced by new connection")
+            except Exception:
+                pass
+
         await websocket.accept()
 
-        # 优先从 Redis 恢复；首次连接时 cache 为空，回落到数据库
-        scene_config = await self._load_session_config(session_id)
-        if not scene_config:
-            scene_config = await self._load_scene_config_from_db(session_id)
-
-        state = SessionState(session_id, scene_config)
-        if state.scene_config:
-            state.system_prompt = conversation_service.build_system_prompt(state.scene_config)
-            if scene_config:
-                print(f"[WS] Session config loaded: {session_id[:8]}")
+        # 重连时复用已有 SessionState（保留对话历史）；首次连接从 cache/DB 加载
+        state = self._states.get(session_id)
+        if state is None:
+            scene_config = await self._load_session_config(session_id)
+            if not scene_config:
+                scene_config = await self._load_scene_config_from_db(session_id)
+            state = SessionState(session_id, scene_config)
+            if state.scene_config:
+                state.system_prompt = conversation_service.build_system_prompt(state.scene_config)
+                if scene_config:
+                    print(f"[WS] Session config loaded: {session_id[:8]}")
+        else:
+            print(f"[WS] Session reconnected: {session_id[:8]}")
+            # 重连时恢复 transcript
+            try:
+                raw = await cache.get(f"session:{session_id}")
+                if raw:
+                    saved = json.loads(raw)
+                    state.transcript_turns = saved.get("transcriptTurns", state.transcript_turns)
+            except Exception:
+                pass
 
         self._connections[session_id] = websocket
         self._states[session_id] = state
@@ -159,14 +244,25 @@ class ConnectionManager:
             "enabled": state.realtime_correction_enabled,
         })
 
+        await self._set_turn_phase(session_id, state, "listening")
+
         print(f"[WS] Client connected: {session_id} (total: {self.active_connections})")
 
-    async def disconnect(self, session_id: str) -> None:
-        """断开连接，持久化会话状态。"""
+    async def disconnect(self, session_id: str, websocket: WebSocket | None = None) -> None:
+        """断开连接，持久化会话状态。
+
+        websocket 用于区分「已被新连接取代的旧 handler」，避免误删活跃连接。
+        """
+        current = self._connections.get(session_id)
+        if websocket is not None and current is not websocket:
+            return
+
         self._connections.pop(session_id, None)
         state = self._states.pop(session_id, None)
 
         if state:
+            # 断开前上传整场录音（用户未点结束直接离开页面时）
+            await self._upload_session_full_audio(state)
             # 保存会话状态到 Redis
             await self._save_session_state(state)
             duration = time.time() - state.connected_at
@@ -197,6 +293,9 @@ class ConnectionManager:
         if msg_type == "audio.input":
             return await self._handle_audio_input(session_id, state, message)
 
+        elif msg_type == "audio.turn.end":
+            return await self._handle_audio_turn_end(session_id, state, message)
+
         elif msg_type == "text.input":
             result = await self._handle_text_input(session_id, state, message)
             # 处理完文本输入后，检查是否有积压音频需要触发
@@ -208,6 +307,12 @@ class ConnectionManager:
 
         elif msg_type == "control.correction":
             return await self._handle_correction_toggle(session_id, state, message)
+
+        elif msg_type == "control.listening":
+            # 前端 TTS 播完后的确认，恢复可录音状态
+            if not state.is_processing and not state.is_tts_active:
+                await self._set_turn_phase(session_id, state, "listening")
+            return {"ack": "listening"}
 
         elif msg_type == "ping":
             # 心跳时检查积压音频 + 不活动超时
@@ -221,10 +326,39 @@ class ConnectionManager:
     # ------------------------------------------------------------------
     # 音频输入处理
     # ------------------------------------------------------------------
+    async def _set_turn_phase(
+        self, session_id: str, state: SessionState, phase: str
+    ) -> None:
+        """同步对话阶段到前端，控制何时可录音。"""
+        if state.turn_phase == phase:
+            return
+        state.turn_phase = phase
+        await self.send_message(session_id, {
+            "type": "turn.phase",
+            "sessionId": session_id,
+            "phase": phase,
+        })
+        print(f"[WS] Phase → {phase} {session_id[:8]}")
+
+    async def _handle_audio_turn_end(
+        self, session_id: str, state: SessionState, message: dict
+    ) -> dict:
+        """客户端检测到 0.5s 静音：立即冲刷当前缓冲进入 ASR。"""
+        if not state.accepts_user_audio():
+            return {"ack": "audio.ignored", "phase": state.turn_phase}
+        if len(state.audio_buffer) == 0:
+            return {"ack": "audio.empty"}
+        self._flush_audio_turn(session_id, state, reason="client_end")
+        return {"ack": "turn.end"}
+
     async def _handle_audio_input(
         self, session_id: str, state: SessionState, message: dict
     ) -> dict:
         """处理 audio.input：累积音频 → 停顿检测 → 触发 ASR。"""
+        # AI 处理/播报期间拒收音频，保证轮流对话
+        if not state.accepts_user_audio():
+            return {"ack": "audio.ignored", "phase": state.turn_phase}
+
         payload = message.get("payload", "")
         seq = message.get("sequenceId", 0)
 
@@ -238,19 +372,41 @@ class ConnectionManager:
         if not pcm_bytes:
             return {"error": "Invalid audio payload"}
 
+        # 长发言时动态放宽 VAD 静音阈值（短句仍 0.5s）
+        effective_silence_ms = state.effective_vad_silence_ms()
+        if state.vad.silence_threshold_ms != effective_silence_ms:
+            state.vad.set_silence_threshold_ms(effective_silence_ms)
+
         # VAD 处理
         is_speech, turn_complete = state.vad.process(pcm_bytes)
 
         state.last_activity = time.time()
+        now = time.time()
 
-        # 只有语音帧才缓冲（过滤静音噪音）
-        if is_speech:
+        # 用户重新开口 → 取消进行中的结束确认，继续累积本轮
+        if is_speech and state._turn_finalize_task and not state._turn_finalize_task.done():
+            state._turn_finalize_task.cancel()
+            state._tail_capture_until = 0.0
+
+        # 轮次进行中：只采集语音帧 + 句末短尾音
+        capturing = (
+            is_speech
+            or state.vad.speech_started
+            or now < state._tail_capture_until
+        )
+        if capturing:
+            if is_speech and state.current_turn_start_ms is None:
+                state.current_turn_start_ms = int((time.time() - state.connected_at) * 1000)
             state.audio_buffer.extend(pcm_bytes)
-            state.last_audio_speech_time = time.time()
+            if is_speech:
+                state.last_audio_speech_time = time.time()
 
         buf_ms = len(state.audio_buffer) / 32
         if seq % 10 == 1:
-            print(f"[WS] buffering #{seq} total={buf_ms:.0f}ms {session_id[:8]}")
+            print(
+                f"[WS] buffering #{seq} buf={buf_ms:.0f}ms "
+                f"vad={effective_silence_ms}ms {session_id[:8]}"
+            )
 
         # 静音超时重置：距上次有效 turn 超过 30s 且近期无语音能量 → 清空噪声缓冲
         # 注意：用户重新开口时 last_audio_speech_time 会更新，避免误清正在累积的音频
@@ -272,62 +428,140 @@ class ConnectionManager:
                 state.audio_buffer = bytearray()
                 state.vad.reset()
 
-        # VAD 静音检测：静音 500ms → turn_complete=True → 立即触发
-        # 最大 5 秒强制触发（防止一直说话不触发）
+        # VAD 句末静音 → 极短确认后触发 ASR
         if turn_complete and len(state.audio_buffer) > 0 and not state.is_processing:
-            dur_sec = len(state.audio_buffer) / 32000
-            # 至少 1.2 秒有效语音才触发（过滤短语气词如 "Yes" 和瞬间噪音）
-            if dur_sec >= 1.0:
-                print(f"[WS] TURN {session_id[:8]}: {dur_sec:.1f}s (silence detected)")
-                audio_data = bytes(state.audio_buffer)
-                state.audio_buffer = bytearray()
-                state.vad.reset()
-                asyncio.create_task(self._process_audio_turn(session_id, state, audio_data))
-            else:
-                # 太短，清空丢弃
-                state.audio_buffer = bytearray()
-                state.vad.reset()
+            tail_sec = max(settings.vad_turn_confirm_ms / 1000.0, 0.12)
+            state._tail_capture_until = time.time() + tail_sec
+            self._schedule_turn_finalize(session_id, state, reason="vad_silence")
 
-        elif buf_ms > 6000 and not state.is_processing:
-            # 连续说话超过 6 秒，强制触发（兜底）
-            dur_sec = len(state.audio_buffer) / 32000
-            print(f"[WS] TURN MAX {session_id[:8]}: {dur_sec:.1f}s")
-            audio_data = bytes(state.audio_buffer)
-            state.audio_buffer = bytearray()
-            state.vad.reset()
-            asyncio.create_task(self._process_audio_turn(session_id, state, audio_data))
-
-        # 有音频缓冲时，延迟检查静音并触发 turn（补充 VAD turn_complete）
-        if len(state.audio_buffer) > 0 and not state.is_processing:
-            if state._silence_check_task and not state._silence_check_task.done():
-                state._silence_check_task.cancel()
-            state._silence_check_task = asyncio.create_task(
-                self._delayed_silence_check(session_id, state)
-            )
+        # 连续说话超过上限 → 立即切分（同步触发，避免每帧 cancel 任务）
+        elif (
+            buf_ms >= settings.vad_max_turn_seconds * 1000
+            and not state.is_processing
+            and len(state.audio_buffer) > 0
+        ):
+            if not state._max_split_logged:
+                print(
+                    f"[WS] TURN MAX {session_id[:8]}: {buf_ms/1000:.1f}s — force split"
+                )
+                state._max_split_logged = True
+            self._flush_audio_turn(session_id, state, reason="max_duration")
 
         return {"ack": "audio.received"}
 
+    def _flush_audio_turn(
+        self, session_id: str, state: SessionState, reason: str
+    ) -> bool:
+        """从当前缓冲立即切出一轮并异步 ASR（不可被重复 cancel）。"""
+        if state.is_processing or len(state.audio_buffer) == 0:
+            return False
+
+        if state._turn_finalize_task and not state._turn_finalize_task.done():
+            state._turn_finalize_task.cancel()
+            state._turn_finalize_task = None
+
+        dur_sec = len(state.audio_buffer) / 32000
+        if dur_sec < settings.vad_min_turn_seconds:
+            return False
+
+        print(f"[WS] TURN {session_id[:8]}: {dur_sec:.1f}s ({reason})")
+        audio_data = bytes(state.audio_buffer)
+        state.audio_buffer = bytearray()
+        state.vad.reset()
+        state._tail_capture_until = 0.0
+        state._max_split_logged = False
+        state.current_turn_start_ms = None
+        asyncio.create_task(self._set_turn_phase(session_id, state, "user_turn"))
+        asyncio.create_task(self._process_audio_turn(session_id, state, audio_data))
+        return True
+
+    def _schedule_turn_finalize(
+        self,
+        session_id: str,
+        state: SessionState,
+        reason: str = "silence",
+        delay_sec: Optional[float] = None,
+        force: bool = False,
+    ) -> None:
+        """延迟确认用户已说完，再触发 ASR。"""
+        if state.is_processing or len(state.audio_buffer) == 0:
+            return
+
+        if delay_sec is None:
+            delay_sec = settings.vad_turn_confirm_ms / 1000.0
+
+        # 已有确认任务时不再重复调度（修复：每帧 reset 导致永远不触发）
+        if (
+            not force
+            and state._turn_finalize_task
+            and not state._turn_finalize_task.done()
+        ):
+            return
+
+        if force and state._turn_finalize_task and not state._turn_finalize_task.done():
+            state._turn_finalize_task.cancel()
+
+        async def _confirm_and_trigger() -> None:
+            try:
+                if delay_sec > 0:
+                    await asyncio.sleep(delay_sec)
+                if state.is_processing or len(state.audio_buffer) == 0:
+                    return
+                # 确认窗口内用户又开口 → 放弃本次触发
+                if state.vad.is_speaking or state.vad.speech_started:
+                    return
+                dur_sec = len(state.audio_buffer) / 32000
+                if dur_sec < settings.vad_min_turn_seconds:
+                    state.audio_buffer = bytearray()
+                    state.vad.reset()
+                    state._tail_capture_until = 0.0
+                    return
+                print(f"[WS] TURN {session_id[:8]}: {dur_sec:.1f}s ({reason}, confirmed)")
+                audio_data = bytes(state.audio_buffer)
+                state.audio_buffer = bytearray()
+                state.vad.reset()
+                state._tail_capture_until = 0.0
+                state._max_split_logged = False
+                state.current_turn_start_ms = None
+                asyncio.create_task(self._set_turn_phase(session_id, state, "user_turn"))
+                asyncio.create_task(self._process_audio_turn(session_id, state, audio_data))
+            except asyncio.CancelledError:
+                pass
+
+        state._turn_finalize_task = asyncio.create_task(_confirm_and_trigger())
+
     async def _delayed_silence_check(self, session_id: str, state: SessionState) -> None:
-        """延迟 700ms 检查是否静音，触发 turn。"""
-        await asyncio.sleep(0.5)
-        buf_s = len(state.audio_buffer) / 32000
-        idle_s = time.time() - state.last_activity
-        print(f"[WS] delayed_check {session_id[:8]}: buf={buf_s:.1f}s idle={idle_s:.1f}s processing={state.is_processing}")
-        await self._maybe_trigger_turn(session_id, state)
+        """兼容旧逻辑：延迟检查静音并调度确认。"""
+        await asyncio.sleep(settings.vad_silence_ms / 1000.0)
+        self._schedule_turn_finalize(session_id, state, reason="delayed_check")
 
     async def _process_audio_turn(
         self, session_id: str, state: SessionState, audio_data: bytes
     ) -> None:
-        """音频 Turn 管线：ASR → LLM → TTS。"""
+        """音频 Turn 管线：ASR → LLM → TTS（录音上传并行，不阻塞识别）。"""
         if state.is_processing:
-            # 上一轮还在处理中，跳过
             print(f"[WS] Turn skipped (still processing): {session_id}")
             return
 
         state.is_processing = True
+        state.turn_count += 1
+        turn_id = f"turn_{state.turn_count:03d}"
+
+        turn_start_ms = state.current_turn_start_ms
+        if turn_start_ms is None:
+            turn_start_ms = max(0, int((time.time() - state.connected_at) * 1000) - int(len(audio_data) / 32))
+        turn_end_ms = turn_start_ms + int(len(audio_data) / 32)
+        state.current_turn_start_ms = None
+
+        # 累积整场录音；WAV 上传与 ASR 并行，避免拖慢响应
+        state.session_recording_pcm.extend(audio_data)
+        upload_task = asyncio.create_task(
+            storage_service.upload_turn_audio(session_id, turn_id, audio_data)
+        )
+        turn_reached_ai = False
 
         try:
-            # 1. ASR 转录
+            # 1. ASR 转录（优先，不等待上传完成）
             print(f"[WS] ASR transcribing {len(audio_data)/32000:.1f}s audio {session_id[:8]}...")
             user_text, confidence = await asr_service.transcribe(audio_data)
 
@@ -348,7 +582,6 @@ class ConnectionManager:
                         "sessionId": session_id,
                         "message": "未检测到有效语音，请重试",
                     })
-                state.is_processing = False
                 return
 
             print(f"[WS] ASR result {session_id[:8]}: \"{user_text[:80]}\" conf={confidence:.2f}")
@@ -373,7 +606,6 @@ class ConnectionManager:
                     "message": hint,
                     "reason": reason,
                 })
-                state.is_processing = False
                 return
 
             # 记录本轮用户文本（用于下轮去重 + 重置不活动计时器）
@@ -384,9 +616,6 @@ class ConnectionManager:
             state._inactivity_prompt_at = 0.0
 
             # 发送最终识别结果（实时模式：直接发 final，不做人工延迟）
-            state.turn_count += 1
-            turn_id = f"turn_{state.turn_count:03d}"
-
             await self.send_message(session_id, {
                 "type": "asr.final",
                 "sessionId": session_id,
@@ -395,8 +624,27 @@ class ConnectionManager:
                 "confidence": confidence,
             })
 
-            # 2. LLM + TTS 管线
-            await self._run_conversation_pipeline(session_id, state, user_text, turn_id)
+            # 等待录音上传完成（通常 ASR 期间已并行完成）
+            audio_meta: dict = {}
+            try:
+                audio_meta = await upload_task
+            except Exception as upload_exc:
+                print(f"[WS] Audio upload failed {session_id[:8]}: {upload_exc}")
+                audio_meta = {
+                    "replayUrl": storage_service.replay_api_path(session_id, turn_id),
+                }
+
+            # 2. LLM + TTS 管线（附带本轮录音元数据供 transcript 回放）
+            turn_reached_ai = True
+            await self._run_conversation_pipeline(
+                session_id,
+                state,
+                user_text,
+                turn_id,
+                user_audio_meta=audio_meta,
+                user_turn_start_ms=turn_start_ms,
+                user_turn_end_ms=turn_end_ms,
+            )
 
             # 3. 异步语法 + 发音分析（不阻塞主链路）
             asyncio.create_task(
@@ -408,6 +656,8 @@ class ConnectionManager:
 
         except Exception as exc:
             print(f"[WS] Audio turn error: {exc}")
+            if not upload_task.done():
+                upload_task.cancel()
             await self.send_message(session_id, {
                 "type": "error",
                 "sessionId": session_id,
@@ -415,6 +665,20 @@ class ConnectionManager:
             })
         finally:
             state.is_processing = False
+            await self._finish_user_turn_phase(session_id, state, turn_reached_ai)
+
+    async def _finish_user_turn_phase(
+        self, session_id: str, state: SessionState, ai_reached: bool
+    ) -> None:
+        """一轮用户输入处理结束，切换对话阶段。"""
+        if not ai_reached:
+            await self._set_turn_phase(session_id, state, "listening")
+            return
+        if settings.enable_server_tts:
+            if not state.is_tts_active:
+                await self._set_turn_phase(session_id, state, "listening")
+        else:
+            await self._set_turn_phase(session_id, state, "ai_speaking")
 
     # ------------------------------------------------------------------
     # 文本输入处理（Demo 主路径）
@@ -464,6 +728,7 @@ class ConnectionManager:
         state.is_processing = True
         state.turn_count += 1
         turn_id = f"turn_{state.turn_count:03d}"
+        await self._set_turn_phase(session_id, state, "user_turn")
 
         # 发送确认（模拟 ASR final，文本输入置信度=1.0）
         await self.send_message(session_id, {
@@ -493,7 +758,15 @@ class ConnectionManager:
     # 对话管线核心
     # ------------------------------------------------------------------
     async def _run_conversation_pipeline(
-        self, session_id: str, state: SessionState, user_text: str, turn_id: str
+        self,
+        session_id: str,
+        state: SessionState,
+        user_text: str,
+        turn_id: str,
+        *,
+        user_audio_meta: Optional[dict] = None,
+        user_turn_start_ms: Optional[int] = None,
+        user_turn_end_ms: Optional[int] = None,
     ) -> None:
         """核心对话管线：LLM 流式生成 → TTS 分句合成 → 消息下发。"""
         try:
@@ -628,6 +901,17 @@ class ConnectionManager:
             # 更新对话历史
             state.add_to_history("user", user_text)
             state.add_to_history("assistant", full_response)
+            state.append_transcript_turn(
+                turn_id,
+                "user",
+                user_text,
+                audio_url=(user_audio_meta or {}).get("replayUrl"),
+                audio_storage_key=(user_audio_meta or {}).get("storageKey"),
+                audio_storage_provider=(user_audio_meta or {}).get("storageProvider"),
+                start_ms=user_turn_start_ms,
+                end_ms=user_turn_end_ms,
+            )
+            state.append_transcript_turn(turn_id, "assistant", full_response)
 
             if full_response.strip() and not any_tts_sent:
                 await self._emit_turn_speech(
@@ -782,6 +1066,7 @@ class ConnectionManager:
             state.is_tts_active = False
             state.last_interaction_time = time.time()
             state._inactivity_prompt_at = 0.0
+            await self._set_turn_phase(session_id, state, "listening")
 
     # ------------------------------------------------------------------
     # 异步语法 + 发音分析（不阻塞主链路）
@@ -857,20 +1142,25 @@ class ConnectionManager:
                         "totalFillers": sum(state.filler_counts.values()),
                     })
 
-            # ---- Pronunciation Agent（仅音频轮） ----
+            # ---- Pronunciation Agent ----
             if audio_data:
                 pron_result = await pronunciation_agent.analyze(
                     session_id, audio_data, transcript, confidence, turn_id,
                 )
-                await analysis_store.append_pronunciation(session_id, {
-                    "turnId": pron_result.turn_id,
-                    "wordsPerMinute": pron_result.words_per_minute,
-                    "pauseCount": pron_result.pause_count,
-                    "lowConfidenceWords": pron_result.low_confidence_words,
-                    "durationSeconds": pron_result.duration_seconds,
-                    "wordCount": pron_result.word_count,
-                    "overallConfidence": pron_result.overall_confidence,
-                })
+            else:
+                # 文本输入：用词数估算 WPM / 停顿
+                pron_result = await pronunciation_agent.analyze_text(
+                    transcript, turn_id, confidence,
+                )
+            await analysis_store.append_pronunciation(session_id, {
+                "turnId": pron_result.turn_id,
+                "wordsPerMinute": pron_result.words_per_minute,
+                "pauseCount": pron_result.pause_count,
+                "lowConfidenceWords": pron_result.low_confidence_words,
+                "durationSeconds": pron_result.duration_seconds,
+                "wordCount": pron_result.word_count,
+                "overallConfidence": pron_result.overall_confidence,
+            })
 
         except Exception as exc:
             print(f"[WS] Async analysis error: {exc}")
@@ -896,6 +1186,17 @@ class ConnectionManager:
         self, session_id: str, state: SessionState, message: dict
     ) -> dict:
         """处理 control.finish 消息。"""
+        # 结束前先处理剩余音频缓冲
+        if len(state.audio_buffer) > 0 and not state.is_processing:
+            dur_sec = len(state.audio_buffer) / 32000
+            if dur_sec >= settings.vad_min_turn_seconds:
+                self._flush_audio_turn(session_id, state, reason="finish")
+            else:
+                state.audio_buffer = bytearray()
+                state.vad.reset()
+
+        await self._upload_session_full_audio(state)
+
         await self.send_message(session_id, {
             "type": "control.finish",
             "sessionId": session_id,
@@ -904,21 +1205,23 @@ class ConnectionManager:
         })
         # 保存最终状态
         await self._save_session_state(state)
+        # 刷入数据库供报告页读取
+        from services.session_persist_service import flush_session_data
+        asyncio.create_task(flush_session_data(session_id))
         return {"status": "finishing"}
 
     # ------------------------------------------------------------------
     # 消息发送
     # ------------------------------------------------------------------
     async def _maybe_trigger_turn(self, session_id: str, state: SessionState) -> None:
-        """检查是否有积压音频且已停顿足够久，触发 ASR 管线。"""
-        if (not state.is_processing and len(state.audio_buffer) > 0 and
-                time.time() - state.last_activity > 0.45):
-            dur_sec = len(state.audio_buffer) / 32000
-            if dur_sec > 0.8:
-                print(f"[WS] TURN SILENCE {session_id[:8]}: {dur_sec:.1f}s audio")
-                audio_data = bytes(state.audio_buffer)
-                state.audio_buffer = bytearray()
-                asyncio.create_task(self._process_audio_turn(session_id, state, audio_data))
+        """心跳时检查积压音频：停说超过 0.5s 则调度确认触发。"""
+        if (
+            not state.is_processing
+            and len(state.audio_buffer) > 0
+            and not state.vad.is_speaking
+            and time.time() - state.last_activity >= (settings.vad_silence_ms / 1000.0)
+        ):
+            self._schedule_turn_finalize(session_id, state, reason="ping_idle")
 
     async def send_message(self, session_id: str, message: dict) -> bool:
         """发送 JSON 消息到客户端。"""
@@ -929,7 +1232,7 @@ class ConnectionManager:
             await ws.send_json(message)
             return True
         except Exception:
-            await self.disconnect(session_id)
+            await self.disconnect(session_id, ws)
             return False
 
     # ------------------------------------------------------------------
@@ -962,8 +1265,9 @@ class ConnectionManager:
                 "reason": "inactivity",
                 "reportStatus": "generating",
             })
+            await self._upload_session_full_audio(state)
             await self._save_session_state(state)
-            await self.disconnect(session_id)
+            await self.disconnect(session_id, self._connections.get(session_id))
             return
 
         if idle_sec >= settings.inactivity_prompt_sec and not state._inactivity_prompt_sent:
@@ -988,6 +1292,18 @@ class ConnectionManager:
     # ------------------------------------------------------------------
     # 状态持久化
     # ------------------------------------------------------------------
+    async def _upload_session_full_audio(self, state: SessionState) -> None:
+        """上传整场用户发言 PCM 至 TOS / 本地（幂等，已上传则跳过）。"""
+        if state.full_audio_url or len(state.session_recording_pcm) == 0:
+            return
+        full_meta = await storage_service.upload_full_session_audio(
+            state.session_id, bytes(state.session_recording_pcm)
+        )
+        if full_meta:
+            state.full_audio_url = full_meta.get("replayUrl")
+            state.full_audio_storage_key = full_meta.get("storageKey")
+            state.full_audio_storage_provider = full_meta.get("storageProvider")
+
     async def _save_session_state(self, state: SessionState) -> None:
         """将会话状态保存到 Redis（用于重连恢复）。"""
         try:
@@ -997,6 +1313,10 @@ class ConnectionManager:
                 "sceneConfig": state.scene_config,
                 "turnCount": state.turn_count,
                 "history": state.history[-10:],  # 只保存最近 5 轮
+                "transcriptTurns": state.transcript_turns,
+                "fullAudioUrl": state.full_audio_url,
+                "fullAudioStorageKey": state.full_audio_storage_key,
+                "fullAudioStorageProvider": state.full_audio_storage_provider,
                 "lastActivity": state.last_activity,
             })
             await cache.set(key, data, ex=settings.session_ttl_seconds)
@@ -1065,12 +1385,14 @@ async def _save_grammar_timeline_event(session_id: str, turn_id: str, grammar_re
                 interview_id=interview_uuid, turn_id=turn_id,
                 event_type="grammar_error",
                 severity=grammar_result.severity if grammar_result.severity != "none" else "minor",
-                title=f"Grammar: {grammar_result.original[:60]}",
-                description=f"Original: '{grammar_result.original}' → Corrected: '{grammar_result.corrected}'",
+                title=f"语法：{grammar_result.original[:40]}",
+                description=(
+                    f"原句「{grammar_result.original}」建议改为「{grammar_result.corrected}」"
+                ),
                 start_ms=estimated_start_ms, end_ms=estimated_end_ms,
                 transcript_snippet=transcript[:200] if transcript else "",
                 evidence={"original": grammar_result.original, "corrected": grammar_result.corrected, "tip": grammar_result.spoken_tip},
-                suggestion=grammar_result.spoken_tip,
+                suggestion=grammar_result.spoken_tip or f"建议使用：{grammar_result.corrected}",
                 display_priority=10 if grammar_result.severity == "serious" else 5,
             ))
             await db.commit()

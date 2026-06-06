@@ -11,7 +11,43 @@ import type {
   SessionEventsResponse,
   SessionReportResponse,
   TimelineEventItem,
+  TranscriptTurn,
 } from "@/types/api";
+
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8000";
+
+/** 将相对回放路径转为完整 URL */
+function resolveAudioUrl(path?: string): string | null {
+  if (!path) return null;
+  if (path.startsWith("http://") || path.startsWith("https://")) return path;
+  return `${API_BASE.replace(/\/$/, "")}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+/** 浏览器朗读英文片段（无录音时的降级） */
+function speakEnglish(text: string) {
+  if (typeof window === "undefined" || !text.trim()) return;
+  window.speechSynthesis.cancel();
+  const utterance = new SpeechSynthesisUtterance(text.trim());
+  utterance.lang = "en-US";
+  utterance.rate = 0.95;
+  window.speechSynthesis.speak(utterance);
+}
+
+/** 播放用户轮次真实录音，无录音则 TTS 朗读片段 */
+function playTurnReplay(turn: TranscriptTurn | undefined, snippet: string, audioEl: HTMLAudioElement | null) {
+  const url = turn?.role === "user" ? resolveAudioUrl(turn.audioUrl) : null;
+  if (url && audioEl) {
+    window.speechSynthesis.cancel();
+    audioEl.pause();
+    audioEl.src = url;
+    void audioEl.play().catch(() => speakEnglish(snippet));
+    return;
+  }
+  speakEnglish(snippet);
+}
 
 export default function ReportPage() {
   const { t } = useLocale();
@@ -22,11 +58,26 @@ export default function ReportPage() {
   const [report, setReport] = useState<SessionReportResponse | null>(null);
   const [timelineEvents, setTimelineEvents] = useState<SessionEventsResponse | null>(null);
   const [reportStatus, setReportStatus] = useState<"loading" | "generating" | "ready" | "error">("loading");
+  const [highlightTurnId, setHighlightTurnId] = useState<string | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
 
-  const handleTimelineEventClick = useCallback((event: TimelineEventItem) => {
-    console.log("[Report] Timeline event clicked:", event.eventId, event.title);
-  }, []);
+  const handleTimelineEventClick = useCallback(
+    (event: TimelineEventItem) => {
+      if (event.turnId) {
+        setHighlightTurnId(event.turnId);
+      }
+      if (!event.transcriptSnippet) return;
+      const userTurn = analysis?.transcriptTurns?.find(
+        (t) => t.turnId === event.turnId && t.role === "user"
+      );
+      if (!audioRef.current && typeof window !== "undefined") {
+        audioRef.current = new Audio();
+      }
+      playTurnReplay(userTurn, event.transcriptSnippet, audioRef.current);
+    },
+    [analysis?.transcriptTurns]
+  );
 
   useEffect(() => {
     let cancelled = false;
@@ -36,7 +87,15 @@ export default function ReportPage() {
         const analysisData = await getSessionAnalysis(sessionId);
         if (!cancelled) setAnalysis(analysisData);
       } catch {
-        if (!cancelled) setAnalysis({ sessionId, pronunciation: [], corrections: [], fillerCounts: {} });
+        if (!cancelled) {
+          setAnalysis({
+            sessionId,
+            pronunciation: [],
+            corrections: [],
+            fillerCounts: {},
+            transcriptTurns: [],
+          });
+        }
       }
 
       try {
@@ -57,7 +116,10 @@ export default function ReportPage() {
         setReportStatus(status);
         if (status === "ready") {
           setReport(reportData);
-          if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+          if (pollRef.current) {
+            clearInterval(pollRef.current);
+            pollRef.current = null;
+          }
         } else if (status === "generating") {
           setReport(reportData);
           if (!pollRef.current) pollRef.current = setInterval(checkReport, 3000);
@@ -71,7 +133,14 @@ export default function ReportPage() {
 
     return () => {
       cancelled = true;
-      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+      if (typeof window !== "undefined") {
+        window.speechSynthesis.cancel();
+        audioRef.current?.pause();
+      }
     };
   }, [sessionId]);
 
@@ -92,7 +161,9 @@ export default function ReportPage() {
         <div className="text-center">
           <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100 text-2xl dark:bg-red-900/30">⚠️</div>
           <p className="text-sm text-zinc-600 dark:text-zinc-400">{t("report.error")}</p>
-          <Link href="/" className="mt-4 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-500">返回首页</Link>
+          <Link href="/" className="mt-4 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-500">
+            返回首页
+          </Link>
         </div>
       </div>
     );
@@ -105,6 +176,7 @@ export default function ReportPage() {
       report={report}
       timelineEvents={timelineEvents}
       reportStatus={reportStatus}
+      highlightTurnId={highlightTurnId}
       onTimelineEventClick={handleTimelineEventClick}
     />
   );

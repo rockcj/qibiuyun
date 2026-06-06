@@ -90,9 +90,17 @@ class Settings(BaseSettings):
     # ---- ASR/TTS ----
     asr_provider: str = "whisper"
     asr_api_base_url: str = ""
-    asr_model: str = "tiny"
+    asr_model: str = "base"
+    # 用户停说 0.5s 后判定短句结束；长发言自动放宽句中停顿容忍
     vad_silence_ms: int = 500
+    vad_long_utterance_silence_ms: int = 1200
+    vad_long_utterance_threshold_ms: int = 2500
+    # 极短确认窗口，仅防 VAD 抖动误触发（不额外增加用户等待）
+    vad_turn_confirm_ms: int = 80
     vad_speech_start_frames: int = 5
+    vad_min_turn_seconds: float = 0.4
+    # 连续说话超过此秒数强制切分一段（避免 Whisper 处理超长音频）
+    vad_max_turn_seconds: float = 20.0
     inactivity_prompt_sec: int = 90
     inactivity_close_after_prompt_sec: int = 30
     openai_api_key: str = ""
@@ -107,6 +115,15 @@ class Settings(BaseSettings):
     pronunciation_low_confidence_threshold: float = 0.6
     pause_silence_ms: int = 300
     grammar_llm_timeout_sec: float = 5.0
+
+    # ---- 对象存储（TOS / 本地兜底） ----
+    object_storage_provider: str = "local"
+    tos_endpoint: str = ""
+    tos_region: str = "cn-guangzhou"
+    tos_bucket: str = ""
+    tos_access_key_id: str = ""
+    tos_secret_access_key: str = ""
+    local_storage_dir: str = "./storage"
 
     # ---- Derived (keep old attribute names for compat) ----
     @property

@@ -79,6 +79,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
   const correctionEnabledRef = useRef(true);
   const [isEnding, setIsEnding] = useState(false);
   const [isAiSpeaking, setIsAiSpeaking] = useState(false);
+  const [turnPhase, setTurnPhase] = useState<"listening" | "user_turn" | "ai_speaking">("listening");
   const [streamingUserText, setStreamingUserText] = useState("");
   // 会话内 transient 提示（ASR 失败、纠正开关等）
   const [sessionNotice, setSessionNotice] = useState<{
@@ -105,6 +106,9 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
   const browserTtsStartedRef = useRef(false);
   const speakFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const setMutedRef = useRef<(muted: boolean) => void>(() => {});
+  /** 是否允许向服务端发送音频（严格轮流） */
+  const canCaptureRef = useRef(true);
+  const sendMessageRef = useRef<(msg: object) => boolean>(() => false);
 
   // 唯一稳定 key — 当前 streaming 的 turn 的 id
   const pendingTurnIdRef = useRef<string>("");
@@ -126,10 +130,29 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
   }, [turns, streamingAiText, streamingUserText, scrollToBottom]);
 
   // ---- TTS 播放（队列 + 浏览器降级） ----
+  const applyTurnPhase = useCallback((phase: "listening" | "user_turn" | "ai_speaking") => {
+    setTurnPhase(phase);
+    if (phase === "listening") {
+      if (!isBrowserSpeakingRef.current && !isPlayingQueueRef.current) {
+        canCaptureRef.current = true;
+        setMutedRef.current(false);
+      }
+    } else {
+      canCaptureRef.current = false;
+      setMutedRef.current(true);
+    }
+  }, []);
+
   const finishSpeaking = useCallback(() => {
     setIsAiSpeaking(false);
-    setTimeout(() => setMutedRef.current(false), 500);
-  }, []);
+    canCaptureRef.current = true;
+    setMutedRef.current(false);
+    sendMessageRef.current({
+      type: "control.listening",
+      sessionId: session.sessionId,
+    });
+    setTurnPhase("listening");
+  }, [session.sessionId]);
 
   const playNextBrowserSpeech = useCallback(() => {
     if (
@@ -301,6 +324,8 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
         }
 
         case "asr.final": {
+          applyTurnPhase("user_turn");
+          setMutedRef.current(true);
           // 立即将用户消息加入 turns（不等 AI 回复！）
           const userText = msg.finalTranscript;
           const stableId = nextId();
@@ -323,6 +348,8 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
 
         case "asr.no_result": {
           setStreamingUserText("");
+          applyTurnPhase("listening");
+          setMutedRef.current(false);
           if (msg.reason === "non_english") {
             showSessionNotice("warning", t("voice.hint.englishOnly"), {
               title: t("voice.englishOnlyTip"),
@@ -420,6 +447,11 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
           break;
         }
 
+        case "turn.phase": {
+          applyTurnPhase(msg.phase);
+          break;
+        }
+
         case "control.finish": {
           navigateToReport();
           break;
@@ -442,7 +474,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
         }
       }
     },
-    [enqueueAudio, enqueueBrowserSpeech, navigateToReport, resetTurnAudio, showSessionNotice, t]
+    [applyTurnPhase, enqueueAudio, enqueueBrowserSpeech, finishSpeaking, navigateToReport, resetTurnAudio, showSessionNotice, t]
   );
 
   // ---- WebSocket ----
@@ -450,6 +482,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
     url: session.websocketUrl,
     onMessage: handleWsMessage,
   });
+  sendMessageRef.current = sendMessage;
 
   // ---- 麦克风 ----
   const {
@@ -460,12 +493,20 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
     setMuted,
     error: micError,
   } = useMicrophone({
+    onTurnEnd: useCallback(() => {
+      if (!canCaptureRef.current) return;
+      sendMessageRef.current({
+        type: "audio.turn.end",
+        sessionId: session.sessionId,
+      });
+    }, [session.sessionId]),
     onAudioChunk: useCallback(
       (base64Pcm: string, sequenceId: number) => {
+        if (!canCaptureRef.current) return;
         if (sequenceId % 50 === 1) {
           console.log(`[Voice] Audio #${sequenceId} size=${base64Pcm.length}b`);
         }
-        if (!sendMessage({
+        if (!sendMessageRef.current({
           type: "audio.input", sessionId: session.sessionId,
           sequenceId, timestampMs: Date.now(),
           codec: "pcm16", sampleRate: 16000, payload: base64Pcm,
@@ -473,7 +514,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
           console.warn("[Voice] WS 未连接，音频未发送");
         }
       },
-      [sendMessage, session.sessionId]
+      [session.sessionId]
     ),
   });
   setMutedRef.current = setMuted;
@@ -684,6 +725,11 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
                 {t("voice.correctionPausedBadge")}
               </span>
             )}
+            {turnPhase !== "listening" && !isAiSpeaking && (
+              <span className="text-xs text-amber-500 animate-pulse">
+                {turnPhase === "user_turn" ? t("voice.processing") : t("voice.aiSpeaking")}
+              </span>
+            )}
             {isAiSpeaking && (
               <span className="text-xs text-indigo-500 animate-pulse">
                 {t("voice.aiSpeaking")}
@@ -862,7 +908,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
           {inputMode === "voice" && (
             <div className="flex items-center justify-center gap-4">
               <button onClick={toggleMic}
-                disabled={micStatus === "denied" || isAiSpeaking}
+                disabled={micStatus === "denied" || turnPhase !== "listening" || isAiSpeaking}
                 className={`flex h-14 w-14 items-center justify-center rounded-full text-xl transition-all ${
                   isRecording
                     ? "animate-pulse bg-red-500 text-white shadow-lg shadow-red-500/30"
@@ -871,8 +917,10 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
                 {isRecording ? "⏹" : "🎤"}
               </button>
               <span className="text-xs text-zinc-500">
-                {isAiSpeaking
+                {isAiSpeaking || turnPhase === "ai_speaking"
                   ? t("voice.aiSpeaking")
+                  : turnPhase === "user_turn"
+                    ? t("voice.processing")
                   : isRecording
                     ? t("voice.listening")
                     : micStatus === "denied"

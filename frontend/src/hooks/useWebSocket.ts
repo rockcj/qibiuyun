@@ -29,6 +29,9 @@ interface UseWebSocketReturn {
   error: string | null;
 }
 
+/** React Strict Mode 下延迟建连，避免 mount/unmount 连续触发 accept→close 风暴 */
+const STRICT_MODE_CONNECT_DELAY_MS = 80;
+
 export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   const {
     url,
@@ -44,6 +47,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectCount = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectDelayTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartbeatTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
   const connectingRef = useRef(false);
@@ -57,37 +61,50 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     }
   }, []);
 
+  const clearConnectDelayTimer = useCallback(() => {
+    if (connectDelayTimer.current) {
+      clearTimeout(connectDelayTimer.current);
+      connectDelayTimer.current = null;
+    }
+  }, []);
+
+  const teardownWebSocket = useCallback((ws: WebSocket | null) => {
+    if (!ws) return;
+    ws.onopen = null;
+    ws.onmessage = null;
+    ws.onerror = null;
+    ws.onclose = null;
+    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+      ws.close(1000);
+    }
+  }, []);
+
   const disconnect = useCallback(() => {
     connectingRef.current = false;
     clearReconnectTimer();
+    clearConnectDelayTimer();
     reconnectCount.current = 0;
     if (heartbeatTimer.current) {
       clearInterval(heartbeatTimer.current);
       heartbeatTimer.current = null;
     }
-    if (wsRef.current) {
-      // 设为 1000(normal) 防止触发 reconnect
-      wsRef.current.close(1000);
-      wsRef.current = null;
-    }
+    teardownWebSocket(wsRef.current);
+    wsRef.current = null;
     if (mountedRef.current) {
       setStatus("disconnected");
     }
-  }, [clearReconnectTimer]);
+  }, [clearReconnectTimer, clearConnectDelayTimer, teardownWebSocket]);
 
   const connect = useCallback(() => {
-    if (!url) return;
-    // 已在连接中或已连接 → 跳过
+    if (!url || !mountedRef.current) return;
     if (connectingRef.current) return;
-    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
+      return;
+    }
 
     connectingRef.current = true;
-
-    // 清理旧连接
-    if (wsRef.current) {
-      wsRef.current.close(1000);
-      wsRef.current = null;
-    }
+    teardownWebSocket(wsRef.current);
+    wsRef.current = null;
 
     if (mountedRef.current) {
       setStatus("connecting");
@@ -100,12 +117,11 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
 
       ws.onopen = () => {
         connectingRef.current = false;
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || wsRef.current !== ws) return;
         setStatus("connected");
         reconnectCount.current = 0;
         console.log("[WS] Connected");
 
-        // 心跳
         if (heartbeatTimer.current) clearInterval(heartbeatTimer.current);
         heartbeatTimer.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -115,7 +131,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       };
 
       ws.onmessage = (event) => {
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || wsRef.current !== ws) return;
         try {
           const msg = JSON.parse(event.data as string) as WsServerMessage;
           onMessageRef.current?.(msg);
@@ -126,18 +142,23 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
 
       ws.onerror = () => {
         connectingRef.current = false;
-        if (!mountedRef.current) return;
+        if (!mountedRef.current || wsRef.current !== ws) return;
         setStatus("error");
         setError("WebSocket 连接错误");
       };
 
       ws.onclose = (event) => {
         connectingRef.current = false;
-        if (heartbeatTimer.current) { clearInterval(heartbeatTimer.current); heartbeatTimer.current = null; }
-        if (!mountedRef.current) return;
+        if (heartbeatTimer.current) {
+          clearInterval(heartbeatTimer.current);
+          heartbeatTimer.current = null;
+        }
+        if (wsRef.current === ws) {
+          wsRef.current = null;
+        }
+        if (!mountedRef.current || wsRef.current !== null) return;
         setStatus("disconnected");
 
-        // 非正常关闭 → 自动重连
         if (event.code !== 1000 && reconnectCount.current < maxReconnects) {
           reconnectCount.current += 1;
           reconnectTimer.current = setTimeout(() => {
@@ -152,7 +173,17 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         setStatus("disconnected");
       }
     }
-  }, [url, reconnectInterval, maxReconnects]);
+  }, [url, reconnectInterval, maxReconnects, teardownWebSocket]);
+
+  const scheduleConnect = useCallback(() => {
+    clearConnectDelayTimer();
+    connectDelayTimer.current = setTimeout(() => {
+      connectDelayTimer.current = null;
+      if (mountedRef.current) {
+        connect();
+      }
+    }, STRICT_MODE_CONNECT_DELAY_MS);
+  }, [clearConnectDelayTimer, connect]);
 
   const sendMessage = useCallback(
     (msg: Record<string, unknown>) => {
@@ -170,25 +201,21 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     mountedRef.current = true;
     connectingRef.current = false;
     if (autoConnect && url) {
-      connect();
+      scheduleConnect();
     }
     return () => {
       mountedRef.current = false;
       connectingRef.current = false;
       clearReconnectTimer();
-      if (heartbeatTimer.current) { clearInterval(heartbeatTimer.current); heartbeatTimer.current = null; }
-      if (wsRef.current) {
-        const ws = wsRef.current;
-        wsRef.current = null;
-        // React StrictMode 卸载时避免在 CONNECTING 状态硬 close 产生报错
-        if (ws.readyState === WebSocket.CONNECTING) {
-          ws.onopen = () => ws.close(1000);
-        } else {
-          ws.close(1000);
-        }
+      clearConnectDelayTimer();
+      if (heartbeatTimer.current) {
+        clearInterval(heartbeatTimer.current);
+        heartbeatTimer.current = null;
       }
+      teardownWebSocket(wsRef.current);
+      wsRef.current = null;
     };
-  }, [url, autoConnect]);  // 去掉了 connect, clearReconnectTimer 依赖，避免每次 render 重建
+  }, [url, autoConnect, scheduleConnect, clearReconnectTimer, clearConnectDelayTimer, teardownWebSocket]);
 
   return { status, sendMessage, connect, disconnect, error };
 }

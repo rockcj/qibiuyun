@@ -16,35 +16,37 @@ def _get_api_key() -> str:
     return settings.deepseek_api_key or settings.llm_api_key
 
 
-SYSTEM_PROMPT_TEMPLATE = """You are an expert English speaking coach and assessor for OfferGPT.
+SYSTEM_PROMPT_TEMPLATE = """你是 OfferGPT 的英语口语评估专家。
 
-## Scene: {scene_display}
-## Rubric: {rubric_str}
-## Rules: {scene_rules}
+## 场景：{scene_display}
+## 评分维度：{rubric_str}
+## 规则：{scene_rules}
 
-For each rubric dimension, assign score (0-100) AND concrete evidence from the session.
+请用**简体中文**撰写所有分析文本（highlights、improvements、finalRecommendation、evidence、timeline 的 title/description/suggestion 均须中文）。英文原句可保留在 transcriptSnippet 中。
 
-Return ONLY valid JSON:
+为每个 rubric 维度给出 0-100 分，并提供来自会话的具体证据。
+
+仅返回合法 JSON：
 {{
   "sceneScore": 78,
-  "scoreName": "Offer Score",
+  "scoreName": "Offer 评分",
   "dimensionScores": {{
-    "english": {{"score": 75, "evidence": "specific quote or observation"}}
+    "english": {{"score": 75, "evidence": "具体引用或观察（中文）"}}
   }},
-  "highlights": ["..."],
-  "improvements": ["..."],
-  "finalRecommendation": "...",
+  "highlights": ["中文亮点"],
+  "improvements": ["中文改进建议"],
+  "finalRecommendation": "中文总结与录用建议",
   "timelineEvents": [
     {{
       "turnId": "turn_002",
       "eventType": "star_missing",
       "severity": "medium",
-      "title": "STAR: Missing Situation",
-      "description": "...",
+      "title": "STAR：缺少 Situation",
+      "description": "中文描述",
       "startMs": 45000,
       "endMs": 65000,
-      "transcriptSnippet": "...",
-      "suggestion": "..."
+      "transcriptSnippet": "英文原句",
+      "suggestion": "中文改进建议"
     }}
   ]
 }}"""
@@ -52,17 +54,17 @@ Return ONLY valid JSON:
 
 def _scene_rules(scene: str) -> str:
     if scene == "interview":
-        return "Job interview. Focus on STAR methodology, quantified impact, technical depth. Score name: 'Offer Score'."
+        return "求职面试。关注 STAR 法则、量化成果、技术深度。评分名称：Offer 评分。"
     elif scene == "restaurant":
-        return "Restaurant dining. Focus on politeness, functional phrases, task completion. Score name: 'Dining Score'."
+        return "餐厅点餐。关注礼貌用语、功能句型、任务完成度。评分名称：点餐评分。"
     elif scene == "meeting":
-        return "Business meeting. Focus on professional communication, meeting control, clarity. Score name: 'Meeting Score'."
-    return "General English conversation."
+        return "商务会议。关注专业沟通、会议掌控、表达清晰度。评分名称：会议评分。"
+    return "通用英语对话练习。"
 
 
 def _scene_display(scene: str) -> str:
-    mapping = {"interview": "Job Interview", "restaurant": "Restaurant Dining", "meeting": "Business Meeting"}
-    return mapping.get(scene, scene.title())
+    mapping = {"interview": "求职面试", "restaurant": "餐厅点餐", "meeting": "商务会议"}
+    return mapping.get(scene, scene)
 
 
 class ReportAgent:
@@ -175,6 +177,7 @@ class ReportAgent:
             parts.append(f"Existing events: {len(existing_timeline_events)}")
 
         parts.append(f"Score all {len(rubric)} dimensions with evidence. Return ONLY JSON.")
+        parts.append("重要：highlights、improvements、finalRecommendation、各维度 evidence、timeline 的 title/description/suggestion 必须使用简体中文。")
         return "\n".join(parts)
 
     def _validate_and_clean(self, result: dict, rubric: list[str], summary: dict) -> dict:
@@ -203,12 +206,20 @@ class ReportAgent:
         highlights = result.get("highlights", []) if isinstance(result.get("highlights"), list) else []
         improvements = result.get("improvements", []) if isinstance(result.get("improvements"), list) else []
         if len(improvements) < 2:
-            improvements.append("Review grammar correction records and practice corrected sentences")
-            improvements.append("Continue practicing with more challenging scenarios")
+            improvements.extend([
+                "对照语法纠正记录，练习修正后的句子。",
+                "继续挑战更高难度场景，巩固表达能力。",
+            ])
 
         final_rec = result.get("finalRecommendation", "")
         if not isinstance(final_rec, str) or not final_rec:
-            final_rec = "Keep practicing to improve your English communication skills."
+            final_rec = "请继续练习，重点改进语法准确性与表达流畅度。"
+        elif final_rec.startswith("Keep practicing") or "Not recommended" in final_rec:
+            final_rec = "本次表现仍有较大提升空间，建议对照纠正记录专项练习后再进行模拟面试。"
+
+        score_name = result.get("scoreName", "Offer 评分")
+        if score_name in ("Offer Score", "Scene Score"):
+            score_name = "Offer 评分"
 
         timeline_events = result.get("timelineEvents", []) if isinstance(result.get("timelineEvents"), list) else []
         cleaned_timeline = []
@@ -231,7 +242,7 @@ class ReportAgent:
 
         return {
             "sceneScore": int(scene_score),
-            "scoreName": result.get("scoreName", "Offer Score"),
+            "scoreName": score_name,
             "dimensionScores": cleaned_dims,
             "highlights": highlights[:5],
             "improvements": improvements[:5],

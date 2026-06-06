@@ -65,7 +65,7 @@ export default function TimelineViewer({ events, onEventClick, t }: TimelineView
                 </p>
               )}
               {event.suggestion && <p className="mt-2 text-xs text-indigo-600 dark:text-indigo-400">💡 {event.suggestion}</p>}
-              <p className="mt-2 text-[10px] text-zinc-400">{t("report.jumpToTranscript")} →</p>
+              <p className="mt-2 text-[10px] text-indigo-500 dark:text-indigo-400">{t("report.jumpToTranscript")} →</p>
             </button>
           </div>
         ))}

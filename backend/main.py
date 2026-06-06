@@ -96,14 +96,16 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str =
     Query params:
         token: JWT access token（demo 模式下可选，生产模式必须）
     """
-    # token 验证：demo 模式放行无 token 连接，生产模式拒绝
+    # token 验证：demo 模式放行无 token；生产模式须先 accept 再 close，避免未握手就关闭
     if not settings.demo_mode_enabled:
         if not token:
+            await websocket.accept()
             await websocket.close(code=4001, reason="请先登录")
             return
         from auth.jwt import decode_token
         payload = decode_token(token)
         if payload is None or payload.get("type") != "access":
+            await websocket.accept()
             await websocket.close(code=4001, reason="登录已过期")
             return
 
@@ -120,8 +122,12 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str =
                 })
     except WebSocketDisconnect:
         pass
+    except RuntimeError as exc:
+        # 客户端在 accept 后立刻断开时，Starlette 可能抛此异常而非 WebSocketDisconnect
+        if "WebSocket is not connected" not in str(exc):
+            raise
     finally:
-        await ws_manager.disconnect(session_id)
+        await ws_manager.disconnect(session_id, websocket)
 
 
 # ---------------------------------------------------------------------------

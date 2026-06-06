@@ -129,6 +129,30 @@ class PronunciationAgent:
             overall_confidence=confidence,
         )
 
+    async def analyze_text(
+        self,
+        transcript: str,
+        turn_id: str = "",
+        confidence: float = 1.0,
+    ) -> PronunciationResult:
+        """文本轮次发音估算（无音频时用词数推算 WPM 与停顿）。"""
+        word_count = len(transcript.split())
+        # 按常见口语 130 WPM 估算时长
+        duration_sec = max(1.0, word_count / 130.0 * 60.0) if word_count else 0.0
+        wpm = round(word_count / duration_sec * 60.0, 1) if duration_sec > 0 else 0.0
+        # 逗号、句号视为轻停顿
+        pause_count = max(0, transcript.count(",") + transcript.count(".") - 1)
+        low_conf_words = self._extract_low_confidence_words(transcript, confidence)
+        return PronunciationResult(
+            turn_id=turn_id,
+            words_per_minute=wpm,
+            pause_count=pause_count,
+            low_confidence_words=low_conf_words,
+            duration_seconds=round(duration_sec, 2),
+            word_count=word_count,
+            overall_confidence=confidence,
+        )
+
 
 # 全局单例
 pronunciation_agent = PronunciationAgent()
