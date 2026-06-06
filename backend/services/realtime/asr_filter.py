@@ -27,10 +27,17 @@ MAX_REPETITION_RATIO = 0.4          # 重复字符占比超过此值丢弃
 DUPLICATE_WINDOW_SEC = 5.0          # 复文本去重时间窗口（秒）
 MAX_TEXT_LENGTH = 500               # 单次识别文本最长字符数
 
+# 实时对话允许的短句（打招呼/确认，不应被过滤）
+CONVERSATION_SHORT_OK = {
+    "hello", "hi", "hey", "yes", "yeah", "yep", "no", "nope",
+    "ok", "okay", "thanks", "thank", "you", "bye", "goodbye",
+    "sorry", "please", "sure", "right", "fine", "good", "well",
+}
+
 # 语气词/短词列表（单独出现时丢弃）
 FILLER_WORDS = {
     "yes", "yeah", "yep", "no", "nope", "ok", "okay", "uh", "um",
-    "hmm", "huh", "eh", "ah", "oh", "hi", "hello", "hey",
+    "hmm", "huh", "eh", "ah", "oh",
     "thanks", "thank you", "sorry", "please", "good", "fine",
     "bye", "goodbye", "well", "so", "right", "sure",
 }
@@ -55,6 +62,20 @@ _REPETITION_PATTERN = re.compile(r'(.)\1{4,}')
 
 # 非正常英文符号连续模式（如中文标点、emoji、特殊符号）
 _GIBBERISH_PATTERN = re.compile(r'[^a-zA-Z0-9\s\',.!?\-]{3,}')
+
+# 中日韩字符（中文语音被 Whisper 误识别时需拦截）
+_CJK_PATTERN = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff]")
+
+
+def _is_likely_english(text: str) -> bool:
+    """判断 ASR 文本是否像英文口语。"""
+    if _CJK_PATTERN.search(text):
+        return False
+    letters = sum(1 for c in text if c.isalpha())
+    if letters == 0:
+        return False
+    latin = sum(1 for c in text if ("a" <= c.lower() <= "z"))
+    return latin / letters >= 0.85
 
 
 # ---------------------------------------------------------------------------
@@ -108,6 +129,12 @@ class ASRFilter:
             self._total_filtered += 1
             return False, "empty"
 
+        # ---- 第 2.5 层：非英文（中文等） ----
+        if not _is_likely_english(clean):
+            print(f"[ASR-Filter] 非英文: \"{clean[:60]}\"")
+            self._total_filtered += 1
+            return False, "non_english"
+
         words = clean.lower().split()
 
         # ---- 第 3 层：文本过长 ----
@@ -136,6 +163,9 @@ class ASRFilter:
 
         # ---- 第 7 层：短词 + 无实义词 ----
         if len(words) < self.min_word_count:
+            # 实时对话常见短句（hello / hi 等）直接放行
+            if all(w in CONVERSATION_SHORT_OK for w in words):
+                return True, ""
             has_content = any(w in CONTENT_SIGNAL_WORDS for w in words)
             is_pure_filler = all(w in FILLER_WORDS for w in words)
             if not has_content and is_pure_filler:

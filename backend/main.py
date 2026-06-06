@@ -22,6 +22,7 @@ from config import settings
 from database import init_db
 from exceptions import ApiError, api_error_handler, http_exception_handler, validation_exception_handler
 from routers import scenes, interviews, resumes, jobs
+from services.asr_service import asr_service
 from services.cache_service import cache
 from websocket.handler import ws_manager
 
@@ -37,6 +38,12 @@ async def lifespan(app: FastAPI):
     print(f"[OfferGPT] Cache ping: {await cache.ping()}")
     await init_db()
     print("[OfferGPT] Database initialized")
+    if not settings.enable_mock_asr:
+        await asr_service.preload()
+        if asr_service._use_mock:
+            print("[OfferGPT] WARNING: ASR unavailable — voice input will not work until Whisper loads")
+        else:
+            print(f"[OfferGPT] ASR ready: whisper-{asr_service._model_name}")
     yield
     # Shutdown
     await cache.disconnect()

@@ -8,7 +8,6 @@
 """
 
 import json
-import re
 import sys
 from typing import Any, AsyncGenerator, Optional
 sys.stdout.reconfigure(encoding="utf-8", errors="replace") if hasattr(sys.stdout, "reconfigure") else None
@@ -31,14 +30,11 @@ Scene: {scene_name} — {topic_name}
 
 Rules:
 1. Stay in character at all times. You are {role_name}, not an AI assistant.
-2. Speak naturally in English, keep responses concise (2-4 sentences).
+2. Speak naturally in English, keep responses concise (1-2 sentences for real-time voice).
 3. Drive the conversation forward — ask follow-up questions, react to what the user says.
-4. If the user makes a serious grammar mistake that affects understanding, briefly correct it
-   in a natural way (one short tip), then continue the conversation. Format your correction as:
-   [CORRECTION: original phrase → corrected phrase]
-5. If the user's response is vague or too short, ask a concrete follow-up question.
-6. Never break character to explain grammar rules at length.
-7. Keep spoken responses under 20 seconds when read aloud.
+4. If the user's response is vague or too short, ask a concrete follow-up question.
+5. Never break character to explain grammar rules at length.
+6. Keep spoken responses under 12 seconds when read aloud.
 
 Current conversation goal: {goal}"""
 
@@ -128,7 +124,6 @@ class ConversationService:
 
         Yields:
             {"type": "text", "content": "token_text"}  — 文本增量
-            {"type": "correction", "original": "...", "corrected": "..."}  — 轻纠正
             {"type": "done"}  — 完成
             {"type": "error", "message": "..."}  — 错误
         """
@@ -153,17 +148,18 @@ class ConversationService:
         }
         payload = {
             "model": self._model,
-            "max_tokens": 256,
+            "max_tokens": 128,
             "messages": messages,
             "stream": True,
-            "temperature": 0.7,
+            "temperature": 0.55,
+            # 实时对话必须关闭 thinking，否则 token 被推理占满且无口播文本
+            "thinking": {"type": "disabled"},
         }
 
         full_text = ""
 
         try:
-            # 设置较长的超时时间：连接 10s，读取 60s（推理模型思考阶段可能较长）
-            timeout = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
+            timeout = httpx.Timeout(connect=5.0, read=30.0, write=5.0, pool=5.0)
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream("POST", url, headers=headers, json=payload) as resp:
                     if resp.status_code != 200:
@@ -183,18 +179,25 @@ class ConversationService:
                         except json.JSONDecodeError:
                             continue
 
-                        # Anthropic 兼容流式格式
+                        # Anthropic / DeepSeek 兼容流式格式
                         delta = None
-                        if "delta" in data:
-                            # OpenAI 兼容格式
-                            delta = data["delta"]
+                        if "delta" in data and isinstance(data["delta"], dict):
+                            inner = data["delta"]
+                            # OpenAI 兼容：{"delta": {"text": "..."}}
+                            if inner.get("text"):
+                                delta = {"text": inner["text"]}
+                            # DeepSeek text_delta：{"delta": {"type": "text_delta", "text": "..."}}
+                            elif inner.get("type") == "text_delta" and inner.get("text"):
+                                delta = {"text": inner["text"]}
                         elif "content_block" in data and data["content_block"].get("type") == "text":
-                            # Anthropic 原生格式
                             delta = {"text": data["content_block"].get("text", "")}
-                        elif "type" in data and data["type"] == "content_block_delta":
+                        elif data.get("type") == "content_block_delta":
                             delta_data = data.get("delta", {})
                             if isinstance(delta_data, dict):
-                                delta = {"text": delta_data.get("text", "")}
+                                if delta_data.get("type") == "text_delta":
+                                    delta = {"text": delta_data.get("text", "")}
+                                elif delta_data.get("text"):
+                                    delta = {"text": delta_data["text"]}
 
                         if delta and delta.get("text"):
                             token = delta["text"]
@@ -205,17 +208,6 @@ class ConversationService:
             yield {"type": "error", "message": "LLM request timeout"}
         except Exception as exc:
             yield {"type": "error", "message": f"LLM error: {str(exc)}"}
-
-        # 解析 [CORRECTION: ...] 模式
-        correction_match = re.search(
-            r"\[CORRECTION:\s*([^\]]+?)\s*→\s*([^\]]+?)\]", full_text
-        )
-        if correction_match:
-            original = correction_match.group(1).strip()
-            corrected = correction_match.group(2).strip()
-            # 移除文本中的 CORRECTION 标记
-            clean_text = re.sub(r"\[CORRECTION:\s*[^\]]+?\]", "", full_text).strip()
-            yield {"type": "correction", "original": original, "corrected": corrected, "cleanText": clean_text}
 
         yield {"type": "done"}
 

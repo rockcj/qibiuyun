@@ -370,6 +370,8 @@ wss://api.offergpt.ai/ws/interviews/{sessionId}?token={sessionToken}
 
 ### 实时轻纠正
 
+由独立 Grammar Agent 异步检测严重语法错误后下发，不阻塞主对话链路。
+
 ```json
 {
   "type": "correction.light",
@@ -378,7 +380,65 @@ wss://api.offergpt.ai/ws/interviews/{sessionId}?token={sessionToken}
   "severity": "high",
   "originalText": "I have did a project.",
   "correctedText": "I have done a project.",
-  "spokenTip": "Just a quick tip: we say 'I have done a project'."
+  "spokenTip": "Just a tip: we say 'I have done a project' instead of 'I have did a project'."
+}
+```
+
+### 语气词/分析计数器
+
+Grammar Agent 统计语气词（um/uh 等）后下发，前端显示计数器。
+
+```json
+{
+  "type": "analysis.counter",
+  "sessionId": "iv_123",
+  "fillerCounts": {"um": 2, "uh": 1},
+  "totalFillers": 3
+}
+```
+
+### 运行时轻纠正开关（上行）
+
+前端会话内开关，关闭后不再触发 `correction.light`。
+
+```json
+{
+  "type": "control.correction",
+  "sessionId": "iv_123",
+  "enabled": false
+}
+```
+
+### 课后分析接口
+
+`GET /api/interviews/{sessionId}/analysis`
+
+返回发音/语法分析汇总，供课后报告使用。
+
+```json
+{
+  "sessionId": "iv_123",
+  "pronunciation": [
+    {
+      "turnId": "turn_001",
+      "wordsPerMinute": 120.5,
+      "pauseCount": 2,
+      "lowConfidenceWords": ["project"],
+      "durationSeconds": 3.2,
+      "wordCount": 8,
+      "overallConfidence": 0.85
+    }
+  ],
+  "corrections": [
+    {
+      "turnId": "turn_001",
+      "original": "have did",
+      "corrected": "have done",
+      "severity": "serious",
+      "transcript": "I have did a project"
+    }
+  ],
+  "fillerCounts": {"um": 2, "uh": 1}
 }
 ```
 

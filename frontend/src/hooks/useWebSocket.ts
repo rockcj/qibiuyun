@@ -46,8 +46,9 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const heartbeatTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const mountedRef = useRef(true);
-  // 防 StrictMode 双重调用：正在连接中时跳过第二次 connect()
   const connectingRef = useRef(false);
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
 
   const clearReconnectTimer = useCallback(() => {
     if (reconnectTimer.current) {
@@ -117,7 +118,7 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         if (!mountedRef.current) return;
         try {
           const msg = JSON.parse(event.data as string) as WsServerMessage;
-          onMessage?.(msg);
+          onMessageRef.current?.(msg);
         } catch {
           console.warn("[WS] Parse error");
         }
@@ -151,13 +152,16 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         setStatus("disconnected");
       }
     }
-  }, [url, reconnectInterval, maxReconnects, onMessage]);
+  }, [url, reconnectInterval, maxReconnects]);
 
   const sendMessage = useCallback(
     (msg: Record<string, unknown>) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(JSON.stringify(msg));
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(msg));
+        return true;
       }
+      return false;
     },
     []
   );
@@ -174,8 +178,14 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
       clearReconnectTimer();
       if (heartbeatTimer.current) { clearInterval(heartbeatTimer.current); heartbeatTimer.current = null; }
       if (wsRef.current) {
-        wsRef.current.close(1000);
+        const ws = wsRef.current;
         wsRef.current = null;
+        // React StrictMode 卸载时避免在 CONNECTING 状态硬 close 产生报错
+        if (ws.readyState === WebSocket.CONNECTING) {
+          ws.onopen = () => ws.close(1000);
+        } else {
+          ws.close(1000);
+        }
       }
     };
   }, [url, autoConnect]);  // 去掉了 connect, clearReconnectTimer 依赖，避免每次 render 重建

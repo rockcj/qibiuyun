@@ -6,12 +6,15 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from config import settings
 from database import get_db
 from exceptions import ApiError
-from models.base import Interview, Job, Resume, User
+from models.base import Interview, Job, Report, Resume, User
+from services.report_service import report_service
 from services.scene_service import get_scene
 
 router = APIRouter(prefix="/api", tags=["interviews"])
@@ -193,23 +196,74 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db)):
     }
 
 
+async def _get_interview_with_report(
+    db: AsyncSession, sid: uuid.UUID
+) -> Optional[Interview]:
+    """加载会话及关联报告。"""
+    result = await db.execute(
+        select(Interview)
+        .options(selectinload(Interview.report))
+        .where(Interview.id == sid)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _ensure_report(
+    db: AsyncSession, interview: Interview, session_id: str
+) -> dict:
+    """生成或读取已持久化的课后报告。"""
+    if interview.report is not None:
+        report = interview.report
+        payload = {
+            "reportId": f"rep_{session_id}",
+            "sessionId": session_id,
+            "scene": interview.scene,
+            "scoreName": report.score_name,
+            "sceneScore": report.scene_score or 0,
+            "dimensionScores": report.dimension_scores or {},
+            "finalRecommendation": (report.report_json or {}).get(
+                "finalRecommendation", ""
+            ),
+            "reportJson": report.report_json or {},
+        }
+        return report_service.payload_to_api_response(payload)
+
+    payload = await report_service.build_report_payload(session_id, interview.scene)
+    db.add(
+        Report(
+            interview_id=interview.id,
+            scene_score=payload["sceneScore"],
+            score_name=payload["scoreName"],
+            dimension_scores=payload["dimensionScores"],
+            report_json={
+                "finalRecommendation": payload["finalRecommendation"],
+                **payload.get("reportJson", {}),
+            },
+        )
+    )
+    await db.flush()
+    return report_service.payload_to_api_response(payload)
+
+
 @router.post("/interviews/{session_id}/finish")
 async def finish_session(session_id: str, db: AsyncSession = Depends(get_db)):
-    """结束会话并触发报告生成。"""
+    """结束会话并同步生成报告。"""
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
         raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
 
-    interview = await db.get(Interview, sid)
+    interview = await _get_interview_with_report(db, sid)
     if interview is None:
         raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
 
     interview.status = "completed"
+    report_data = await _ensure_report(db, interview, session_id)
     return {
         "sessionId": session_id,
         "status": "completed",
-        "reportStatus": "generating",
+        "reportStatus": "ready",
+        "sceneScore": report_data.get("sceneScore", 0),
     }
 
 
@@ -228,9 +282,9 @@ async def get_session_events(session_id: str, db: AsyncSession = Depends(get_db)
     return {"events": []}
 
 
-@router.get("/interviews/{session_id}/report")
-async def get_session_report(session_id: str, db: AsyncSession = Depends(get_db)):
-    """获取场景报告。"""
+@router.get("/interviews/{session_id}/analysis")
+async def get_session_analysis(session_id: str, db: AsyncSession = Depends(get_db)):
+    """获取会话发音/语法分析汇总（课后报告数据源）。"""
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
@@ -240,15 +294,38 @@ async def get_session_report(session_id: str, db: AsyncSession = Depends(get_db)
     if interview is None:
         raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
 
+    from services.realtime import analysis_store
+    summary = await analysis_store.get_summary(session_id)
+
+    if summary is None:
+        return {
+            "sessionId": session_id,
+            "pronunciation": [],
+            "corrections": [],
+            "fillerCounts": {},
+        }
+
+    return {
+        "sessionId": session_id,
+        "pronunciation": summary.get("pronunciation", []),
+        "corrections": summary.get("corrections", []),
+        "fillerCounts": summary.get("fillerCounts", {}),
+    }
+
+
+@router.get("/interviews/{session_id}/report")
+async def get_session_report(session_id: str, db: AsyncSession = Depends(get_db)):
+    """获取场景报告（基于分析数据规则评分，finish 后立即可用）。"""
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
+
+    interview = await _get_interview_with_report(db, sid)
+    if interview is None:
+        raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
+
     if interview.status != "completed":
         raise ApiError("SESSION_NOT_COMPLETED", "会话尚未结束")
 
-    return {
-        "reportId": f"rep_{session_id}",
-        "sessionId": session_id,
-        "scene": interview.scene,
-        "scoreName": "Offer Score",
-        "sceneScore": 0,
-        "dimensionScores": {},
-        "finalRecommendation": "报告正在生成中，请稍后刷新。",
-    }
+    return await _ensure_report(db, interview, session_id)

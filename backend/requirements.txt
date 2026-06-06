@@ -16,6 +16,5 @@ pypdf==5.1.0
 edge-tts==6.1.12
 openai-whisper==20250625
 openai==2.41.0
-numpy==2.4.6
-websockets==14.1
-httpx==0.28.1
+numpy>=1.26.0,<2.0.0
+torch>=2.0.0

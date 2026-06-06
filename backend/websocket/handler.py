@@ -10,6 +10,7 @@
 
 import asyncio
 import json
+import re
 import time
 import uuid
 from typing import Optional
@@ -21,18 +22,42 @@ from services.asr_service import EnergyVAD, asr_service
 from services.cache_service import cache
 from services.conversation_service import conversation_service
 from services.realtime.asr_filter import asr_filter
+from services.realtime.grammar_agent import grammar_agent
+from services.realtime.pronunciation_agent import pronunciation_agent
+from services.realtime import analysis_store
 from services.tts_service import tts_service
 
 
-# ---------------------------------------------------------------------------
-# 会话不活动超时配置
-# ---------------------------------------------------------------------------
-_INACTIVITY_PROMPT_SEC = 30      # 连续 30 秒无有效输入 → 发送 "Are you still there?"
-_INACTIVITY_CLOSE_SEC = 50       # 连续 50 秒无响应 → 自动结束会话
+# 句末标点分句（用于 LLM 流式输出时增量 TTS，仅整句切分避免重复朗读）
+_TTS_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _extract_tts_chunks(buffer: str) -> tuple[list[str], str]:
+    """从缓冲中提取已完成整句，返回 (句子列表, 剩余缓冲)。"""
+    if not buffer.strip():
+        return [], buffer
+
+    result: list[str] = []
+    remaining = buffer
+
+    parts = _TTS_SENTENCE_SPLIT.split(remaining)
+    if len(parts) > 1:
+        for part in parts[:-1]:
+            chunk = part.strip()
+            if chunk:
+                result.append(chunk)
+        remaining = parts[-1]
+    else:
+        stripped = remaining.rstrip()
+        if stripped and stripped[-1] in ".!?" and len(stripped) >= 4:
+            result.append(stripped)
+            remaining = ""
+
+    return result, remaining
 
 
 # ---------------------------------------------------------------------------
-# 会话状态
+# 会话不活动超时（默认值，可被 settings 覆盖）
 # ---------------------------------------------------------------------------
 class SessionState:
     """单个 WebSocket 会话的运行时状态。"""
@@ -42,10 +67,10 @@ class SessionState:
         self.scene_config = scene_config or {}
         self.connected_at = time.time()
 
-        # VAD：1200ms 静音判定 turn 结束 + 300ms 最小语音防止瞬时噪音
+        # VAD：默认 700ms 静音判定 turn 结束，更快响应
         self.vad = EnergyVAD(
-            silence_threshold_ms=1200,
-            speech_start_frames=10,  # 10 帧 × 30ms = 300ms 最小语音
+            silence_threshold_ms=settings.vad_silence_ms,
+            speech_start_frames=settings.vad_speech_start_frames,
         )
         self.audio_buffer: bytearray = bytearray()
 
@@ -63,9 +88,24 @@ class SessionState:
         self.last_activity: float = time.time()
         self.last_user_text: Optional[str] = None  # 上一次用户发言，用于去重
         self.last_user_text_time: float = 0  # 上次有效发言时间戳
+        # 最后一次有效交互（用户发言或 AI 播报完成），用于不活动超时
+        self.last_interaction_time: float = self.connected_at
+        self.is_tts_active: bool = False  # 是否正在下发 TTS 音频
 
         # 不活动超时追踪
         self._inactivity_prompt_sent: bool = False  # 是否已发送 "Are you still there?"
+        self._inactivity_prompt_at: float = 0.0  # 发送不活动提示的时间戳
+
+        # 实时轻纠正开关（初值取 scene_config，已在上方归一化为 dict）
+        self.realtime_correction_enabled: bool = self.scene_config.get(
+            "realtimeLightCorrection", True
+        )
+        # 语气词累计计数
+        self.filler_counts: dict[str, int] = {}
+        # 最近一次检测到语音能量的时间（用于区分「久未对话」与「正在重新开口」）
+        self.last_audio_speech_time: float = 0.0
+        # 静音检测延迟任务（debounce）
+        self._silence_check_task: Optional[asyncio.Task] = None
 
     def add_to_history(self, role: str, content: str) -> None:
         self.history.append({"role": role, "content": content})
@@ -98,16 +138,26 @@ class ConnectionManager:
     async def connect(self, websocket: WebSocket, session_id: str) -> None:
         await websocket.accept()
 
-        # 尝试从 Redis 恢复会话状态
+        # 优先从 Redis 恢复；首次连接时 cache 为空，回落到数据库
         scene_config = await self._load_session_config(session_id)
+        if not scene_config:
+            scene_config = await self._load_scene_config_from_db(session_id)
 
         state = SessionState(session_id, scene_config)
-        if scene_config:
-            state.system_prompt = conversation_service.build_system_prompt(scene_config)
-            print(f"[WS] Session restored from cache: {session_id}")
+        if state.scene_config:
+            state.system_prompt = conversation_service.build_system_prompt(state.scene_config)
+            if scene_config:
+                print(f"[WS] Session config loaded: {session_id[:8]}")
 
         self._connections[session_id] = websocket
         self._states[session_id] = state
+
+        # 同步实时纠正开关到前端
+        await self.send_message(session_id, {
+            "type": "correction.state",
+            "sessionId": session_id,
+            "enabled": state.realtime_correction_enabled,
+        })
 
         print(f"[WS] Client connected: {session_id} (total: {self.active_connections})")
 
@@ -156,6 +206,9 @@ class ConnectionManager:
         elif msg_type == "control.finish":
             return await self._handle_finish(session_id, state, message)
 
+        elif msg_type == "control.correction":
+            return await self._handle_correction_toggle(session_id, state, message)
+
         elif msg_type == "ping":
             # 心跳时检查积压音频 + 不活动超时
             await self._maybe_trigger_turn(session_id, state)
@@ -193,14 +246,27 @@ class ConnectionManager:
         # 只有语音帧才缓冲（过滤静音噪音）
         if is_speech:
             state.audio_buffer.extend(pcm_bytes)
+            state.last_audio_speech_time = time.time()
 
         buf_ms = len(state.audio_buffer) / 32
         if seq % 10 == 1:
             print(f"[WS] buffering #{seq} total={buf_ms:.0f}ms {session_id[:8]}")
 
-        # 静音超时重置：连续 30 秒无有效 turn 自动清空缓冲区（防止噪声累积）
+        # 静音超时重置：距上次有效 turn 超过 30s 且近期无语音能量 → 清空噪声缓冲
+        # 注意：用户重新开口时 last_audio_speech_time 会更新，避免误清正在累积的音频
         idle_since_last_turn = time.time() - state.last_user_text_time
-        if state.last_user_text_time > 0 and idle_since_last_turn > 30:
+        idle_since_speech = (
+            time.time() - state.last_audio_speech_time
+            if state.last_audio_speech_time > 0
+            else idle_since_last_turn
+        )
+        if (
+            state.last_user_text_time > 0
+            and idle_since_last_turn > 30
+            and idle_since_speech > 3
+            and not is_speech
+            and not state.vad.is_speaking
+        ):
             if len(state.audio_buffer) > 0:
                 print(f"[WS] Silence timeout ({idle_since_last_turn:.0f}s), flushing buffer {session_id[:8]}")
                 state.audio_buffer = bytearray()
@@ -211,7 +277,7 @@ class ConnectionManager:
         if turn_complete and len(state.audio_buffer) > 0 and not state.is_processing:
             dur_sec = len(state.audio_buffer) / 32000
             # 至少 1.2 秒有效语音才触发（过滤短语气词如 "Yes" 和瞬间噪音）
-            if dur_sec >= 1.2:
+            if dur_sec >= 1.0:
                 print(f"[WS] TURN {session_id[:8]}: {dur_sec:.1f}s (silence detected)")
                 audio_data = bytes(state.audio_buffer)
                 state.audio_buffer = bytearray()
@@ -222,8 +288,8 @@ class ConnectionManager:
                 state.audio_buffer = bytearray()
                 state.vad.reset()
 
-        elif buf_ms > 15000 and not state.is_processing:
-            # 说了超 15 秒还不停，强制触发（兜底）
+        elif buf_ms > 6000 and not state.is_processing:
+            # 连续说话超过 6 秒，强制触发（兜底）
             dur_sec = len(state.audio_buffer) / 32000
             print(f"[WS] TURN MAX {session_id[:8]}: {dur_sec:.1f}s")
             audio_data = bytes(state.audio_buffer)
@@ -231,11 +297,19 @@ class ConnectionManager:
             state.vad.reset()
             asyncio.create_task(self._process_audio_turn(session_id, state, audio_data))
 
+        # 有音频缓冲时，延迟检查静音并触发 turn（补充 VAD turn_complete）
+        if len(state.audio_buffer) > 0 and not state.is_processing:
+            if state._silence_check_task and not state._silence_check_task.done():
+                state._silence_check_task.cancel()
+            state._silence_check_task = asyncio.create_task(
+                self._delayed_silence_check(session_id, state)
+            )
+
         return {"ack": "audio.received"}
 
     async def _delayed_silence_check(self, session_id: str, state: SessionState) -> None:
         """延迟 700ms 检查是否静音，触发 turn。"""
-        await asyncio.sleep(0.7)
+        await asyncio.sleep(0.5)
         buf_s = len(state.audio_buffer) / 32000
         idle_s = time.time() - state.last_activity
         print(f"[WS] delayed_check {session_id[:8]}: buf={buf_s:.1f}s idle={idle_s:.1f}s processing={state.is_processing}")
@@ -288,10 +362,16 @@ class ConnectionManager:
             )
             if not valid:
                 print(f"[WS] ASR filtered {session_id[:8]} ({reason}): \"{user_text[:80]}\"")
+                hint = (
+                    "请使用英语发言（English only please）"
+                    if reason == "non_english"
+                    else "未检测到有效语音，请重试"
+                )
                 await self.send_message(session_id, {
                     "type": "asr.no_result",
                     "sessionId": session_id,
-                    "message": "未检测到有效语音，请重试",
+                    "message": hint,
+                    "reason": reason,
                 })
                 state.is_processing = False
                 return
@@ -299,26 +379,13 @@ class ConnectionManager:
             # 记录本轮用户文本（用于下轮去重 + 重置不活动计时器）
             state.last_user_text = user_text
             state.last_user_text_time = time.time()
+            state.last_interaction_time = time.time()
             state._inactivity_prompt_sent = False
+            state._inactivity_prompt_at = 0.0
 
-            # 发送最终识别结果
+            # 发送最终识别结果（实时模式：直接发 final，不做人工延迟）
             state.turn_count += 1
             turn_id = f"turn_{state.turn_count:03d}"
-
-            # 模拟流式字幕：逐词发送 partial，再发 final
-            words = user_text.split()
-            partial = ""
-            for i, word in enumerate(words):
-                partial += (" " if partial else "") + word
-                # 每隔 1-2 个词发一次，不要太频繁
-                if i % 2 == 0 or i == len(words) - 1:
-                    await self.send_message(session_id, {
-                        "type": "asr.partial",
-                        "sessionId": session_id,
-                        "turnId": turn_id,
-                        "partialTranscript": partial,
-                    })
-                    await asyncio.sleep(0.05)  # 模拟流式延迟
 
             await self.send_message(session_id, {
                 "type": "asr.final",
@@ -330,6 +397,14 @@ class ConnectionManager:
 
             # 2. LLM + TTS 管线
             await self._run_conversation_pipeline(session_id, state, user_text, turn_id)
+
+            # 3. 异步语法 + 发音分析（不阻塞主链路）
+            asyncio.create_task(
+                self._run_async_analysis(
+                    session_id, state, user_text, turn_id,
+                    audio_data=audio_data, confidence=confidence,
+                )
+            )
 
         except Exception as exc:
             print(f"[WS] Audio turn error: {exc}")
@@ -361,12 +436,25 @@ class ConnectionManager:
         )
         if not valid:
             print(f"[WS] Text filtered {session_id[:8]} ({reason}): \"{user_text}\"")
-            return {"ack": "text.skipped", "message": "无效输入，请重试"}
+            hint = (
+                "请使用英语发言（English only please）"
+                if reason == "non_english"
+                else "无效输入，请重试"
+            )
+            await self.send_message(session_id, {
+                "type": "asr.no_result",
+                "sessionId": session_id,
+                "message": hint,
+                "reason": reason,
+            })
+            return {"ack": "text.skipped", "message": hint}
 
         # 更新有效发言时间（重置不活动计时器）
         state.last_user_text = user_text
         state.last_user_text_time = time.time()
-        state._inactivity_prompt_sent = False  # 有有效输入，重置提示标记
+        state.last_interaction_time = time.time()
+        state._inactivity_prompt_sent = False
+        state._inactivity_prompt_at = 0.0
 
         if state.is_processing:
             # 排队等待：上一轮完成后自动处理
@@ -391,6 +479,14 @@ class ConnectionManager:
             self._run_conversation_pipeline(session_id, state, user_text, turn_id)
         )
 
+        # 异步语法分析（文本输入无音频，跳过发音分析）
+        asyncio.create_task(
+            self._run_async_analysis(
+                session_id, state, user_text, turn_id,
+                audio_data=None, confidence=1.0,
+            )
+        )
+
         return {"ack": "text.received", "turnId": turn_id}
 
     # ------------------------------------------------------------------
@@ -412,47 +508,115 @@ class ConnectionManager:
                     "Keep responses natural, concise (2-4 sentences), and engaging."
                 )
 
-            # 1. 流式 LLM 生成
+            # 1. 流式 LLM + 分句朗读（浏览器模式即时推送，服务端模式异步队列）
             full_response = ""
-            correction_info = None
+            tts_buffer = ""
+            any_tts_sent = False
+            use_server_tts = settings.enable_server_tts
+            tts_queue: asyncio.Queue[str | None] = asyncio.Queue()
+            tts_task: Optional[asyncio.Task] = None
 
-            async for chunk in conversation_service.stream_chat(
-                system_prompt=state.system_prompt,
-                user_message=user_text,
-                history=state.history,
-            ):
-                if chunk["type"] == "text":
-                    full_response += chunk["content"]
-                    await self.send_message(session_id, {
-                        "type": "agent.text.delta",
-                        "sessionId": session_id,
-                        "turnId": turn_id,
-                        "delta": chunk["content"],
-                    })
-
-                elif chunk["type"] == "correction":
-                    correction_info = chunk
-                    # 使用清理后的文本作为展示文本
-                    if "cleanText" in chunk:
-                        full_response = chunk["cleanText"]
-                    await self.send_message(session_id, {
-                        "type": "correction.light",
-                        "sessionId": session_id,
-                        "turnId": turn_id,
-                        "severity": "medium",
-                        "originalText": chunk["original"],
-                        "correctedText": chunk["corrected"],
-                        "spokenTip": f"Just a quick tip: '{chunk['corrected']}' instead of '{chunk['original']}'.",
-                    })
-
-                elif chunk["type"] == "error":
-                    await self.send_message(session_id, {
-                        "type": "error",
-                        "sessionId": session_id,
-                        "message": chunk["message"],
-                    })
-                    state.is_processing = False
+            async def enqueue_speech(sentence: str) -> None:
+                nonlocal any_tts_sent
+                if not sentence.strip():
                     return
+                if use_server_tts:
+                    await tts_queue.put(sentence)
+                elif await self._emit_turn_speech(
+                    session_id, state, sentence, turn_id
+                ):
+                    any_tts_sent = True
+
+            async def tts_worker() -> None:
+                nonlocal any_tts_sent
+                while True:
+                    chunk_text = await tts_queue.get()
+                    try:
+                        if chunk_text is None:
+                            break
+                        if await self._send_tts_sentence(
+                            session_id, state, chunk_text, turn_id
+                        ):
+                            any_tts_sent = True
+                    finally:
+                        tts_queue.task_done()
+
+            if use_server_tts:
+                tts_task = asyncio.create_task(tts_worker())
+
+            pipeline_failed = False
+
+            try:
+                async for chunk in conversation_service.stream_chat(
+                    system_prompt=state.system_prompt,
+                    user_message=user_text,
+                    history=state.history,
+                ):
+                    if chunk["type"] == "text":
+                        token = chunk["content"]
+                        full_response += token
+                        tts_buffer += token
+                        await self.send_message(session_id, {
+                            "type": "agent.text.delta",
+                            "sessionId": session_id,
+                            "turnId": turn_id,
+                            "delta": token,
+                        })
+
+                        sentences, tts_buffer = _extract_tts_chunks(tts_buffer)
+                        for sentence in sentences:
+                            await enqueue_speech(sentence)
+
+                    elif chunk["type"] == "error":
+                        pipeline_failed = True
+                        await self.send_message(session_id, {
+                            "type": "error",
+                            "sessionId": session_id,
+                            "message": chunk["message"],
+                        })
+                        fallback_text = (
+                            "I'm sorry, could you repeat that? "
+                            "I didn't quite catch what you said."
+                        )
+                        await self.send_message(session_id, {
+                            "type": "agent.text.delta",
+                            "sessionId": session_id,
+                            "turnId": turn_id,
+                            "delta": fallback_text,
+                        })
+                        await self.send_message(session_id, {
+                            "type": "agent.text.done",
+                            "sessionId": session_id,
+                            "turnId": turn_id,
+                        })
+                        await self._stream_tts(
+                            session_id, state, fallback_text, turn_id
+                        )
+                        state.is_processing = False
+                        return
+            finally:
+                if not pipeline_failed and tts_buffer.strip():
+                    await enqueue_speech(tts_buffer.strip())
+                if use_server_tts and tts_task:
+                    await tts_queue.put(None)
+                    await tts_task
+
+            # LLM 无正文时使用兜底回复
+            if not full_response.strip() and not pipeline_failed:
+                print(f"[WS] LLM empty response {session_id[:8]} {turn_id}, using fallback")
+                full_response = (
+                    "Hi! Thanks for that. Could you tell me a bit more about your experience?"
+                )
+                await self.send_message(session_id, {
+                    "type": "agent.text.delta",
+                    "sessionId": session_id,
+                    "turnId": turn_id,
+                    "delta": full_response,
+                })
+                if await self._emit_turn_speech(
+                    session_id, state, full_response, turn_id
+                ):
+                    any_tts_sent = True
 
             # 发送文本完成标记
             await self.send_message(session_id, {
@@ -465,9 +629,11 @@ class ConnectionManager:
             state.add_to_history("user", user_text)
             state.add_to_history("assistant", full_response)
 
-            # 2. TTS 流式合成
-            if full_response.strip():
-                await self._stream_tts(session_id, state, full_response, turn_id)
+            if full_response.strip() and not any_tts_sent:
+                await self._emit_turn_speech(
+                    session_id, state, full_response.strip(), turn_id
+                )
+            state.last_interaction_time = time.time()
 
             # 3. 处理排队中的文本
             if state.pending_text:
@@ -503,6 +669,7 @@ class ConnectionManager:
                 "sessionId": session_id,
                 "turnId": turn_id,
             })
+            await self._stream_tts(session_id, state, fallback_text, turn_id)
             # 仍然更新历史，保持上下文连续性
             state.add_to_history("user", user_text)
             state.add_to_history("assistant", fallback_text)
@@ -525,24 +692,197 @@ class ConnectionManager:
             else:
                 state.is_processing = False
 
+    async def _emit_turn_speech(
+        self, session_id: str, state: SessionState, text: str, turn_id: str
+    ) -> bool:
+        """下发朗读：服务端 TTS 或浏览器 speechSynthesis 信号（tts.unavailable）。"""
+        if not text.strip():
+            return False
+        if settings.enable_server_tts:
+            return await self._send_tts_sentence(
+                session_id, state, text.strip(), turn_id
+            )
+        await self.send_message(session_id, {
+            "type": "tts.unavailable",
+            "sessionId": session_id,
+            "turnId": turn_id,
+            "text": text.strip(),
+        })
+        return True
+
+    async def _send_tts_sentence(
+        self, session_id: str, state: SessionState, sentence: str, turn_id: str
+    ) -> bool:
+        """合成并下发单句 TTS，返回是否成功发送音频。"""
+        if not sentence.strip():
+            return False
+
+        state.is_tts_active = True
+        sent = False
+        try:
+            async for _, audio_b64 in tts_service.synthesize_stream(sentence):
+                if audio_b64:
+                    sent = True
+                    await self.send_message(session_id, {
+                        "type": "tts.audio.delta",
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "codec": "mp3",
+                        "payload": audio_b64,
+                        "text": sentence,
+                    })
+        finally:
+            state.is_tts_active = False
+        return sent
+
     async def _stream_tts(
         self, session_id: str, state: SessionState, text: str, turn_id: str
     ) -> None:
-        """流式 TTS 合成并下发音频。"""
-        async for sentence, audio_b64 in tts_service.synthesize_stream(text):
-            if audio_b64:
-                # 有音频：发送 tts.audio.delta
+        """流式朗读：浏览器模式按句推送；服务端模式走 EdgeTTS。"""
+        if not text.strip():
+            return
+
+        if not settings.enable_server_tts:
+            sentences, remainder = _extract_tts_chunks(text.strip() + " ")
+            chunks = sentences[:]
+            if remainder.strip():
+                chunks.append(remainder.strip())
+            if not chunks:
+                chunks = [text.strip()]
+            for chunk in chunks:
+                await self._emit_turn_speech(session_id, state, chunk, turn_id)
+            state.last_interaction_time = time.time()
+            state._inactivity_prompt_at = 0.0
+            return
+
+        state.is_tts_active = True
+        sent_any = False
+        try:
+            async for sentence, audio_b64 in tts_service.synthesize_stream(text):
+                if audio_b64:
+                    sent_any = True
+                    await self.send_message(session_id, {
+                        "type": "tts.audio.delta",
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "codec": "mp3",
+                        "payload": audio_b64,
+                        "text": sentence,
+                    })
+
+            if not sent_any:
+                print(f"[TTS] No audio generated, fallback signal sent {session_id[:8]}")
                 await self.send_message(session_id, {
-                    "type": "tts.audio.delta",
+                    "type": "tts.unavailable",
                     "sessionId": session_id,
                     "turnId": turn_id,
-                    "codec": "mp3",
-                    "payload": audio_b64,
-                    "text": sentence,  # 对应的文本，方便前端字幕同步
+                    "text": text.strip(),
                 })
+        finally:
+            state.is_tts_active = False
+            state.last_interaction_time = time.time()
+            state._inactivity_prompt_at = 0.0
+
+    # ------------------------------------------------------------------
+    # 异步语法 + 发音分析（不阻塞主链路）
+    # ------------------------------------------------------------------
+    async def _run_async_analysis(
+        self,
+        session_id: str,
+        state: SessionState,
+        transcript: str,
+        turn_id: str,
+        *,
+        audio_data: Optional[bytes] = None,
+        confidence: float = 1.0,
+    ) -> None:
+        """异步触发 Grammar Agent + Pronunciation Agent，结果写入 cache 并下发 WS 消息。"""
+        try:
+            correction_policy = state.scene_config.get("correctionPolicy", {})
+
+            # 开关关闭时不做语法纠正，保留用户原句
+            if not state.realtime_correction_enabled:
+                filler_counts = grammar_agent.count_fillers(transcript)
+                if filler_counts:
+                    for word, count in filler_counts.items():
+                        state.filler_counts[word] = state.filler_counts.get(word, 0) + count
+                        await analysis_store.incr_filler(session_id, word, count)
+                    await self.send_message(session_id, {
+                        "type": "analysis.counter",
+                        "sessionId": session_id,
+                        "fillerCounts": state.filler_counts,
+                        "totalFillers": sum(state.filler_counts.values()),
+                    })
             else:
-                # Mock 模式：文本已通过 agent.text.delta 发送，此处跳过音频
-                pass
+                # ---- Grammar Agent（分析用 pro 模型） ----
+                grammar_result = await grammar_agent.analyze(
+                    transcript,
+                    realtime_enabled=True,
+                    correction_policy=correction_policy,
+                )
+
+                if grammar_result.severity != "none":
+                    await analysis_store.append_correction(session_id, {
+                        "turnId": turn_id,
+                        "original": grammar_result.original,
+                        "corrected": grammar_result.corrected,
+                        "severity": grammar_result.severity,
+                        "transcript": transcript,
+                    })
+
+                if grammar_result.spoken_tip:
+                    await self.send_message(session_id, {
+                        "type": "correction.light",
+                        "sessionId": session_id,
+                        "turnId": turn_id,
+                        "severity": "high" if grammar_result.severity == "serious" else "medium",
+                        "originalText": grammar_result.original,
+                        "correctedText": grammar_result.corrected,
+                        "spokenTip": grammar_result.spoken_tip,
+                    })
+
+                if grammar_result.filler_counts:
+                    for word, count in grammar_result.filler_counts.items():
+                        state.filler_counts[word] = state.filler_counts.get(word, 0) + count
+                        await analysis_store.incr_filler(session_id, word, count)
+                    await self.send_message(session_id, {
+                        "type": "analysis.counter",
+                        "sessionId": session_id,
+                        "fillerCounts": state.filler_counts,
+                        "totalFillers": sum(state.filler_counts.values()),
+                    })
+
+            # ---- Pronunciation Agent（仅音频轮） ----
+            if audio_data:
+                pron_result = await pronunciation_agent.analyze(
+                    session_id, audio_data, transcript, confidence, turn_id,
+                )
+                await analysis_store.append_pronunciation(session_id, {
+                    "turnId": pron_result.turn_id,
+                    "wordsPerMinute": pron_result.words_per_minute,
+                    "pauseCount": pron_result.pause_count,
+                    "lowConfidenceWords": pron_result.low_confidence_words,
+                    "durationSeconds": pron_result.duration_seconds,
+                    "wordCount": pron_result.word_count,
+                    "overallConfidence": pron_result.overall_confidence,
+                })
+
+        except Exception as exc:
+            print(f"[WS] Async analysis error: {exc}")
+
+    async def _handle_correction_toggle(
+        self, session_id: str, state: SessionState, message: dict
+    ) -> dict:
+        """处理 control.correction 消息：运行时开关实时轻纠正。"""
+        enabled = message.get("enabled", True)
+        state.realtime_correction_enabled = bool(enabled)
+        print(f"[WS] Correction toggle {session_id[:8]}: {enabled}")
+        await self.send_message(session_id, {
+            "type": "correction.state",
+            "sessionId": session_id,
+            "enabled": state.realtime_correction_enabled,
+        })
+        return {"ack": "correction.updated", "enabled": state.realtime_correction_enabled}
 
     # ------------------------------------------------------------------
     # 结束会话
@@ -567,9 +907,9 @@ class ConnectionManager:
     async def _maybe_trigger_turn(self, session_id: str, state: SessionState) -> None:
         """检查是否有积压音频且已停顿足够久，触发 ASR 管线。"""
         if (not state.is_processing and len(state.audio_buffer) > 0 and
-                time.time() - state.last_activity > 0.6):
+                time.time() - state.last_activity > 0.45):
             dur_sec = len(state.audio_buffer) / 32000
-            if dur_sec > 0.3:
+            if dur_sec > 0.8:
                 print(f"[WS] TURN SILENCE {session_id[:8]}: {dur_sec:.1f}s audio")
                 audio_data = bytes(state.audio_buffer)
                 state.audio_buffer = bytearray()
@@ -594,18 +934,23 @@ class ConnectionManager:
         """检查会话是否长时间无有效输入。
 
         规则：
-        - 30 秒无有效输入 → 发送 "Are you still there?"（仅一次）
-        - 再过 20 秒仍无响应 → 自动结束会话
+        - 默认 90 秒无有效交互 → 发送 "Are you still there?"（仅一次）
+        - 提示后再过 30 秒仍无响应 → 自动结束会话
         """
         state = self._states.get(session_id)
-        if state is None or state.is_processing:
+        if state is None or state.is_processing or state.is_tts_active:
             return
 
-        idle_sec = time.time() - max(state.last_user_text_time, state.connected_at)
+        idle_sec = time.time() - state.last_interaction_time
+        close_after_prompt = settings.inactivity_close_after_prompt_sec
 
-        if idle_sec >= _INACTIVITY_CLOSE_SEC and state._inactivity_prompt_sent:
+        if (
+            state._inactivity_prompt_sent
+            and state._inactivity_prompt_at > 0
+            and time.time() - state._inactivity_prompt_at >= close_after_prompt
+        ):
             # 已发送提示但用户仍未响应 → 结束会话
-            print(f"[WS] Session auto-end due to {idle_sec:.0f}s inactivity: {session_id[:8]}")
+            print(f"[WS] Session auto-end after inactivity prompt: {session_id[:8]}")
             await self.send_message(session_id, {
                 "type": "control.finish",
                 "sessionId": session_id,
@@ -616,21 +961,24 @@ class ConnectionManager:
             await self.disconnect(session_id)
             return
 
-        if idle_sec >= _INACTIVITY_PROMPT_SEC and not state._inactivity_prompt_sent:
-            # 30 秒无输入 → 发送提醒
+        if idle_sec >= settings.inactivity_prompt_sec and not state._inactivity_prompt_sent:
+            # 长时间无交互 → 发送提醒
             print(f"[WS] Sending inactivity prompt after {idle_sec:.0f}s: {session_id[:8]}")
             state._inactivity_prompt_sent = True
+            state._inactivity_prompt_at = time.time()
+            prompt_text = "Are you still there? I haven't heard from you for a while."
             await self.send_message(session_id, {
                 "type": "agent.text.delta",
                 "sessionId": session_id,
                 "turnId": "inactivity_prompt",
-                "delta": " Are you still there? I haven't heard from you for a while.",
+                "delta": f" {prompt_text}",
             })
             await self.send_message(session_id, {
                 "type": "agent.text.done",
                 "sessionId": session_id,
                 "turnId": "inactivity_prompt",
             })
+            await self._stream_tts(session_id, state, prompt_text, "inactivity_prompt")
 
     # ------------------------------------------------------------------
     # 状态持久化
@@ -660,6 +1008,22 @@ class ConnectionManager:
                 return data.get("sceneConfig")
         except Exception:
             pass
+        return None
+
+    async def _load_scene_config_from_db(self, session_id: str) -> Optional[dict]:
+        """首次 WebSocket 连接时从 interviews 表加载 scene_config。"""
+        try:
+            from database import async_session_factory
+            from models.base import Interview
+
+            sid = uuid.UUID(session_id)
+            async with async_session_factory() as db:
+                interview = await db.get(Interview, sid)
+                if interview and interview.scene_config:
+                    print(f"[WS] Scene config from DB: {session_id[:8]}")
+                    return interview.scene_config
+        except Exception as exc:
+            print(f"[WS] Failed to load scene config from DB: {exc}")
         return None
 
     # ------------------------------------------------------------------

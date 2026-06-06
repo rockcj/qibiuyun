@@ -165,6 +165,14 @@ export interface WsTtsAudioDelta {
   text?: string;
 }
 
+/** 服务端 TTS 不可用，前端应使用浏览器 speechSynthesis 降级朗读 */
+export interface WsTtsUnavailable {
+  type: "tts.unavailable";
+  sessionId: string;
+  turnId: string;
+  text: string;
+}
+
 /** 实时轻纠正 */
 export interface WsCorrectionLight {
   type: "correction.light";
@@ -174,6 +182,28 @@ export interface WsCorrectionLight {
   originalText: string;
   correctedText: string;
   spokenTip: string;
+}
+
+/** 语气词/分析计数器 */
+export interface WsAnalysisCounter {
+  type: "analysis.counter";
+  sessionId: string;
+  fillerCounts: Record<string, number>;
+  totalFillers: number;
+}
+
+/** 实时纠正开关状态（下行同步） */
+export interface WsCorrectionState {
+  type: "correction.state";
+  sessionId: string;
+  enabled: boolean;
+}
+
+/** 运行时轻纠正开关（上行） */
+export interface WsControlCorrection {
+  type: "control.correction";
+  sessionId: string;
+  enabled: boolean;
 }
 
 /** 结束控制 */
@@ -209,6 +239,8 @@ export interface WsAsrNoResult {
   type: "asr.no_result";
   sessionId: string;
   message: string;
+  /** 过滤原因，便于前端展示对应提示 */
+  reason?: string;
 }
 
 /** 所有下行 WebSocket 消息联合类型 */
@@ -219,7 +251,10 @@ export type WsServerMessage =
   | WsAgentTextDelta
   | WsAgentTextDone
   | WsTtsAudioDelta
+  | WsTtsUnavailable
   | WsCorrectionLight
+  | WsCorrectionState
+  | WsAnalysisCounter
   | WsControlFinish
   | WsAsrUnavailable
   | WsError
@@ -232,4 +267,45 @@ export interface TurnRecord {
   userText: string;
   aiText: string;
   correction?: { original: string; corrected: string };
+}
+
+/** 单轮发音分析记录 */
+export interface PronunciationRecord {
+  turnId: string;
+  wordsPerMinute: number;
+  pauseCount: number;
+  lowConfidenceWords: string[];
+  durationSeconds?: number;
+  wordCount?: number;
+  overallConfidence?: number;
+}
+
+/** 语法纠正记录（含轻微错误） */
+export interface CorrectionRecord {
+  turnId: string;
+  original: string;
+  corrected: string;
+  severity: "none" | "minor" | "serious";
+  transcript?: string;
+}
+
+/** 课后分析汇总（GET /api/interviews/{id}/analysis） */
+export interface SessionAnalysisResponse {
+  sessionId: string;
+  pronunciation: PronunciationRecord[];
+  corrections: CorrectionRecord[];
+  fillerCounts: Record<string, number>;
+}
+
+/** 场景报告（GET /api/interviews/{id}/report） */
+export interface SessionReportResponse {
+  reportId: string;
+  sessionId: string;
+  scene: string;
+  scoreName: string;
+  sceneScore: number;
+  dimensionScores: Record<string, number>;
+  finalRecommendation: string;
+  highlights?: string[];
+  improvements?: string[];
 }

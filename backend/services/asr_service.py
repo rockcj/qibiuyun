@@ -126,9 +126,10 @@ class ASRService:
     def __init__(self):
         self._model = None
         # tiny(39MB) < base(74MB) < small(244MB) < medium(775MB) < large(1.5GB)
-        self._model_name: str = getattr(settings, "asr_model", "small") or "small"
-        if self._model_name in ("whisper-1", "whisper", "tiny"):
-            self._model_name = "small"
+        self._model_name: str = getattr(settings, "asr_model", "tiny") or "tiny"
+        # whisper-1 环境变量映射为 tiny，优先低延迟（约 39MB）
+        if self._model_name in ("whisper-1", "whisper"):
+            self._model_name = "tiny"
         self._loaded: bool = False
         self._use_mock: bool = settings.enable_mock_asr
 
@@ -138,14 +139,22 @@ class ASRService:
             return
         try:
             import whisper
-            print(f"[ASR] Loading local Whisper model: {self._model_name} (free, ~72MB)...")
+            print(f"[ASR] Loading local Whisper model: {self._model_name} (free)...")
             self._model = whisper.load_model(self._model_name)
             self._loaded = True
             print(f"[ASR] Whisper model loaded successfully: {self._model_name}")
         except Exception as exc:
             print(f"[ASR] Failed to load Whisper model: {exc}")
-            print(f"[ASR] Falling back to mock mode — use text.input")
+            if "numpy" in str(exc).lower() or "Numpy is not available" in str(exc):
+                print("[ASR] Hint: pip install \"numpy>=1.26,<2\" then restart backend")
+            print("[ASR] Falling back to mock mode — use text.input")
             self._use_mock = True
+
+    async def preload(self) -> None:
+        """启动时预加载 Whisper，避免首轮对话等待。"""
+        if self._use_mock:
+            return
+        await asyncio.to_thread(self._ensure_model)
 
     async def transcribe(
         self, pcm_bytes: bytes, sample_rate: int = 16000
