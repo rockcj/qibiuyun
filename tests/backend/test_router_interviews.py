@@ -152,7 +152,8 @@ class TestInterviewsRouter:
         assert resp.status_code == 200
         data = resp.json()
         assert data["status"] == "completed"
-        assert data["reportStatus"] == "generating"
+        assert data["reportStatus"] == "ready"
+        assert "sceneScore" in data
 
     @pytest.mark.asyncio
     async def test_invalid_topic_returns_error(

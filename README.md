@@ -59,11 +59,37 @@ qibiuyun/
 | 餐厅点餐 | `restaurant` | 友好/忙碌/不耐烦服务员 |
 | 商务会议 | `meeting` | 主持人、同事、上级 |
 
+详见 [前后端代码结构速查](docs/前后端代码结构速查.md)（Bug 定位、数据流、模块职责）。
+
 ## 技术栈
 
 - **前端**：Next.js 16 + TypeScript + Tailwind CSS 4
 - **后端**：FastAPI + SQLAlchemy + SQLite/PostgreSQL
 - **实时通信**：WebSocket
 - **缓存**：Redis（可选，开发用内存缓存）
-- **LLM**：GPT-4o + DeepSeek（待接入）
-- **ASR/TTS**：Whisper + EdgeTTS（待接入）
+- **LLM**：DeepSeek V4 Pro（流式对话）
+- **ASR/TTS**：本地 Whisper + EdgeTTS（免费方案已接入）
+
+## Step 4：实时轻纠正 & 异步发音/语法分析
+
+### 原创功能说明
+
+- **Grammar Agent**（`backend/services/realtime/grammar_agent.py`）：独立异步语法分析，规则优先 + LLM 增强，检测严重语法错误并触发 `correction.light` WebSocket 消息。
+- **Pronunciation Agent**（`backend/services/realtime/pronunciation_agent.py`）：异步计算语速(WPM)、停顿次数、低置信度关键词，写入 cache 供课后报告。
+- **Analysis Store**（`backend/services/realtime/analysis_store.py`）：基于 cache_service 的会话级分析数据存储。
+- **CorrectionToast**（`frontend/src/components/CorrectionToast.tsx`）：非模态轻纠正提示，不打断对话流。
+
+### 验证方式
+
+1. 启动后端 + 前端，创建面试会话
+2. 文本输入 `I have did a project last year`，观察 Toast 提示 "Just a tip: we say 'have done'..."
+3. AI 仍正常回复，对话不中断
+4. 顶部显示语气词计数器（如 `um:2`）
+5. 关闭「实时轻纠正」开关后，不再弹出 Toast
+6. 会话结束后访问 `GET /api/interviews/{sessionId}/analysis` 查看汇总数据
+
+### 运行测试
+
+```bash
+python -m pytest tests/backend/test_grammar_agent.py tests/backend/test_pronunciation_agent.py tests/backend/test_websocket_handler.py -v
+```

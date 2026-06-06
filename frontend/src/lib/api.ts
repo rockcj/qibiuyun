@@ -7,9 +7,14 @@ import type {
   JobCreateResponse,
   ResumeUploadResponse,
   SceneFull,
+  SessionAnalysisResponse,
+  SessionReportResponse,
 } from "@/types/api";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL ||
+  process.env.NEXT_PUBLIC_API_URL ||
+  "http://localhost:8000";
 
 /** 解析后端错误响应 */
 async function parseError(res: Response): Promise<string> {
@@ -73,6 +78,47 @@ export async function createSession(
     body: JSON.stringify(payload),
   });
 
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return res.json();
+}
+
+/** 结束训练会话 */
+export async function finishSession(sessionId: string): Promise<{
+  sessionId: string;
+  status: string;
+  reportStatus: string;
+}> {
+  const res = await fetch(`${API_BASE}/api/interviews/${sessionId}/finish`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return res.json();
+}
+
+/** 获取课后发音/语法分析汇总 */
+export async function getSessionAnalysis(
+  sessionId: string
+): Promise<SessionAnalysisResponse> {
+  const res = await fetch(`${API_BASE}/api/interviews/${sessionId}/analysis`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return res.json();
+}
+
+/** 获取场景报告 */
+export async function getSessionReport(
+  sessionId: string
+): Promise<SessionReportResponse> {
+  const res = await fetch(`${API_BASE}/api/interviews/${sessionId}/report`, {
+    cache: "no-store",
+  });
   if (!res.ok) {
     throw new Error(await parseError(res));
   }

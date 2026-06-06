@@ -1,5 +1,16 @@
 """OfferGPT Backend – FastAPI application entry point."""
 
+import os
+import sys
+# Windows GBK 编码修复（必须放在最顶部，在所有 print 之前生效）
+os.environ.setdefault("PYTHONIOENCODING", "utf-8")
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+import asyncio
+import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -11,6 +22,7 @@ from config import settings
 from database import init_db
 from exceptions import ApiError, api_error_handler, http_exception_handler, validation_exception_handler
 from routers import scenes, interviews, resumes, jobs
+from services.asr_service import asr_service
 from services.cache_service import cache
 from websocket.handler import ws_manager
 
@@ -26,6 +38,12 @@ async def lifespan(app: FastAPI):
     print(f"[OfferGPT] Cache ping: {await cache.ping()}")
     await init_db()
     print("[OfferGPT] Database initialized")
+    if not settings.enable_mock_asr:
+        await asr_service.preload()
+        if asr_service._use_mock:
+            print("[OfferGPT] WARNING: ASR unavailable — voice input will not work until Whisper loads")
+        else:
+            print(f"[OfferGPT] ASR ready: whisper-{asr_service._model_name}")
     yield
     # Shutdown
     await cache.disconnect()
