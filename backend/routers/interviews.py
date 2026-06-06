@@ -1,11 +1,13 @@
 """Session (interview) router – POST /api/interviews, GET, finish, events, report."""
 
+import asyncio
+import json
 import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -13,9 +15,13 @@ from sqlalchemy.orm import selectinload
 from config import settings
 from database import get_db
 from exceptions import ApiError
-from models.base import Interview, Job, Report, Resume, User
+from models.base import Interview, Job, Report, Resume, TimelineEvent, User
 from services.report_service import report_service
 from services.scene_service import get_scene
+
+
+def _utcnow():
+    return datetime.now(timezone.utc)
 
 router = APIRouter(prefix="/api", tags=["interviews"])
 
@@ -208,46 +214,186 @@ async def _get_interview_with_report(
     return result.scalar_one_or_none()
 
 
-async def _ensure_report(
-    db: AsyncSession, interview: Interview, session_id: str
-) -> dict:
-    """生成或读取已持久化的课后报告。"""
-    if interview.report is not None:
-        report = interview.report
-        payload = {
-            "reportId": f"rep_{session_id}",
-            "sessionId": session_id,
-            "scene": interview.scene,
-            "scoreName": report.score_name,
-            "sceneScore": report.scene_score or 0,
-            "dimensionScores": report.dimension_scores or {},
-            "finalRecommendation": (report.report_json or {}).get(
-                "finalRecommendation", ""
-            ),
-            "reportJson": report.report_json or {},
-        }
-        return report_service.payload_to_api_response(payload)
+def _build_report_response(report: Report, session_id: str, scene: str) -> dict:
+    """从 Report ORM 对象构建 API 响应。"""
+    report_json = report.report_json or {}
+    dim_evidence = report_json.get("dimensionEvidence", {})
+    evidence_list = []
+    for dim, info in dim_evidence.items():
+        if isinstance(info, dict):
+            evidence_list.append({
+                "dimension": dim,
+                "score": info.get("score", 0),
+                "evidence": info.get("evidence", ""),
+            })
+        elif isinstance(info, (int, float)):
+            evidence_list.append({
+                "dimension": dim,
+                "score": int(info),
+                "evidence": "",
+            })
 
-    payload = await report_service.build_report_payload(session_id, interview.scene)
-    db.add(
-        Report(
-            interview_id=interview.id,
-            scene_score=payload["sceneScore"],
-            score_name=payload["scoreName"],
-            dimension_scores=payload["dimensionScores"],
-            report_json={
-                "finalRecommendation": payload["finalRecommendation"],
-                **payload.get("reportJson", {}),
-            },
-        )
-    )
-    await db.flush()
-    return report_service.payload_to_api_response(payload)
+    return {
+        "reportId": f"rep_{session_id}",
+        "sessionId": session_id,
+        "scene": scene,
+        "scoreName": report.score_name,
+        "sceneScore": report.scene_score or 0,
+        "dimensionScores": report.dimension_scores or {},
+        "finalRecommendation": report_json.get("finalRecommendation", ""),
+        "highlights": report_json.get("highlights", []),
+        "improvements": report_json.get("improvements", []),
+        "evidenceList": evidence_list,
+        "reportStatus": "ready",
+    }
+
+
+def _build_generating_response(session_id: str, scene: str) -> dict:
+    """返回报告生成中的模板响应。"""
+    return {
+        "reportId": None,
+        "sessionId": session_id,
+        "scene": scene,
+        "scoreName": "Offer Score" if scene == "interview" else "Scene Score",
+        "sceneScore": 0,
+        "dimensionScores": {},
+        "finalRecommendation": "",
+        "highlights": [],
+        "improvements": [],
+        "evidenceList": [],
+        "reportStatus": "generating",
+    }
+
+
+async def _generate_report_background(session_id: str, interview_id_str: str):
+    """后台任务：通过 LLM Agent 生成报告，失败时降级到规则引擎。"""
+    from database import async_session_factory
+    from services.cache_service import cache
+    from services.realtime import analysis_store
+    from services.report_agent import report_agent
+
+    try:
+        # ---- Phase 1: 收集数据 ----
+        analysis_summary = await analysis_store.get_summary(session_id)
+        if analysis_summary is None:
+            analysis_summary = {"corrections": [], "fillerCounts": {}, "pronunciation": []}
+
+        # 从 Redis 读取对话历史
+        conversation_history = []
+        try:
+            raw = await cache.get(f"session:{session_id}")
+            if raw:
+                session_data = json.loads(raw)
+                conversation_history = session_data.get("history", [])
+        except Exception:
+            pass
+
+        interview_uuid = uuid.UUID(interview_id_str)
+
+        async with async_session_factory() as bg_db:
+            # 读取已有时间轴事件
+            result = await bg_db.execute(
+                select(TimelineEvent)
+                .where(TimelineEvent.interview_id == interview_uuid)
+                .order_by(TimelineEvent.start_ms)
+            )
+            existing_events = result.scalars().all()
+
+            # 读取 Interview
+            interview = await bg_db.get(Interview, interview_uuid)
+            if interview is None:
+                print(f"[ReportBg] Interview not found: {interview_id_str}")
+                return
+
+            scene_config = interview.scene_config or {}
+            scene = interview.scene
+
+            existing_events_data = [
+                {
+                    "turnId": e.turn_id,
+                    "eventType": e.event_type,
+                    "severity": e.severity,
+                    "title": e.title,
+                    "startMs": e.start_ms,
+                    "endMs": e.end_ms,
+                }
+                for e in existing_events
+            ]
+
+            # ---- Phase 2: 尝试 LLM ----
+            llm_result = await report_agent.generate(
+                session_id=session_id,
+                scene=scene,
+                scene_config=scene_config,
+                analysis_summary=analysis_summary,
+                conversation_history=conversation_history,
+                existing_timeline_events=existing_events_data,
+            )
+
+            # ---- Phase 3: 持久化 ----
+            if llm_result:
+                # LLM 成功
+                dim_scores_simple = {}
+                for dim, info in llm_result.get("dimensionScores", {}).items():
+                    dim_scores_simple[dim] = info.get("score", 60) if isinstance(info, dict) else info
+
+                bg_db.add(Report(
+                    interview_id=interview_uuid,
+                    scene_score=llm_result["sceneScore"],
+                    score_name=llm_result.get("scoreName", "Offer Score"),
+                    dimension_scores=dim_scores_simple,
+                    report_json={
+                        "dimensionEvidence": llm_result.get("dimensionScores", {}),
+                        "highlights": llm_result.get("highlights", []),
+                        "improvements": llm_result.get("improvements", []),
+                        "finalRecommendation": llm_result.get("finalRecommendation", ""),
+                        "generatedBy": "llm",
+                    },
+                ))
+
+                for event in llm_result.get("timelineEvents", []):
+                    bg_db.add(TimelineEvent(
+                        interview_id=interview_uuid,
+                        turn_id=event.get("turnId"),
+                        event_type=event.get("eventType", "llm_detected"),
+                        severity=event.get("severity", "medium"),
+                        title=event.get("title", ""),
+                        description=event.get("description", ""),
+                        start_ms=event.get("startMs", 0),
+                        end_ms=event.get("endMs", 0),
+                        transcript_snippet=event.get("transcriptSnippet", ""),
+                        suggestion=event.get("suggestion", ""),
+                        evidence=event.get("evidence"),
+                        display_priority=event.get("displayPriority", 0),
+                    ))
+
+                print(f"[ReportBg] LLM report saved for {interview_id_str}")
+            else:
+                # LLM 失败 → 规则兜底
+                payload = await report_service.build_report_payload(session_id, scene)
+                bg_db.add(Report(
+                    interview_id=interview_uuid,
+                    scene_score=payload["sceneScore"],
+                    score_name=payload["scoreName"],
+                    dimension_scores=payload["dimensionScores"],
+                    report_json={
+                        "highlights": payload.get("reportJson", {}).get("highlights", []),
+                        "improvements": payload.get("reportJson", {}).get("improvements", []),
+                        "finalRecommendation": payload.get("finalRecommendation", ""),
+                        "generatedBy": "rules",
+                    },
+                ))
+                print(f"[ReportBg] Rules-based report saved for {interview_id_str}")
+
+            await bg_db.commit()
+
+    except Exception as exc:
+        print(f"[ReportBg] Fatal error: {exc}")
 
 
 @router.post("/interviews/{session_id}/finish")
 async def finish_session(session_id: str, db: AsyncSession = Depends(get_db)):
-    """结束会话并同步生成报告。"""
+    """结束会话并异步生成报告。"""
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
@@ -257,19 +403,32 @@ async def finish_session(session_id: str, db: AsyncSession = Depends(get_db)):
     if interview is None:
         raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
 
-    interview.status = "completed"
-    report_data = await _ensure_report(db, interview, session_id)
+    if interview.status != "completed":
+        interview.status = "completed"
+        interview.ended_at = _utcnow()
+
+    # 如果已有报告，直接返回 ready
+    if interview.report is not None:
+        return {
+            "sessionId": session_id,
+            "status": "completed",
+            "reportStatus": "ready",
+            "sceneScore": interview.report.scene_score or 0,
+        }
+
+    # 触发后台异步生成
+    asyncio.create_task(_generate_report_background(session_id, str(interview.id)))
+
     return {
         "sessionId": session_id,
         "status": "completed",
-        "reportStatus": "ready",
-        "sceneScore": report_data.get("sceneScore", 0),
+        "reportStatus": "generating",
     }
 
 
 @router.get("/interviews/{session_id}/events")
 async def get_session_events(session_id: str, db: AsyncSession = Depends(get_db)):
-    """获取 VAR 时间轴事件（当前返回空列表）。"""
+    """获取 VAR 时间轴事件。"""
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
@@ -279,7 +438,33 @@ async def get_session_events(session_id: str, db: AsyncSession = Depends(get_db)
     if interview is None:
         raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
 
-    return {"events": []}
+    result = await db.execute(
+        select(TimelineEvent)
+        .where(TimelineEvent.interview_id == sid)
+        .order_by(TimelineEvent.start_ms)
+    )
+    events = result.scalars().all()
+
+    return {
+        "sessionId": session_id,
+        "events": [
+            {
+                "eventId": str(e.id),
+                "turnId": e.turn_id,
+                "eventType": e.event_type,
+                "severity": e.severity,
+                "title": e.title,
+                "description": e.description,
+                "startMs": e.start_ms,
+                "endMs": e.end_ms,
+                "transcriptSnippet": e.transcript_snippet,
+                "evidence": e.evidence,
+                "suggestion": e.suggestion,
+                "displayPriority": e.display_priority,
+            }
+            for e in events
+        ],
+    }
 
 
 @router.get("/interviews/{session_id}/analysis")
@@ -315,7 +500,7 @@ async def get_session_analysis(session_id: str, db: AsyncSession = Depends(get_d
 
 @router.get("/interviews/{session_id}/report")
 async def get_session_report(session_id: str, db: AsyncSession = Depends(get_db)):
-    """获取场景报告（基于分析数据规则评分，finish 后立即可用）。"""
+    """获取场景报告。生成中返回 reportStatus: 'generating'。"""
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
@@ -325,7 +510,12 @@ async def get_session_report(session_id: str, db: AsyncSession = Depends(get_db)
     if interview is None:
         raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
 
-    if interview.status != "completed":
-        raise ApiError("SESSION_NOT_COMPLETED", "会话尚未结束")
+    # 报告已生成 → 返回完整数据
+    if interview.report is not None:
+        return _build_report_response(interview.report, session_id, interview.scene)
 
-    return await _ensure_report(db, interview, session_id)
+    # 会话已结束但报告尚未生成 → generating
+    if interview.status == "completed":
+        return _build_generating_response(session_id, interview.scene)
+
+    raise ApiError("SESSION_NOT_COMPLETED", "会话尚未结束")
