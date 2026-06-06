@@ -333,10 +333,23 @@ export interface TimelineEventItem {
   evidence?: Record<string, unknown>;
   suggestion?: string;
   displayPriority?: number;
+  aiResponse?: string | null;  // AI 针对该轮次的回复文本
 }
 
 /** 时间轴事件列表响应 */
 export interface SessionEventsResponse {
   sessionId: string;
   events: TimelineEventItem[];
+}
+
+/** 会话详情（GET /api/interviews/{id}） */
+export interface SessionDetail {
+  sessionId: string;
+  scene: string;
+  topic?: string;
+  roleMode?: string;
+  status: string;
+  startedAt?: string;
+  durationSeconds?: number;
+  audioUrl?: string | null;  // 录音文件地址
 }

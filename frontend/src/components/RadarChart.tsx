@@ -13,6 +13,7 @@ interface RadarChartProps {
   size?: number;
   maxScore?: number;
   className?: string;
+  t?: (key: string) => string;
 }
 
 function getVertex(index: number, total: number, value: number, center: number, radius: number) {
@@ -30,7 +31,7 @@ function polygonPoints(total: number, value: number, center: number, radius: num
   }).join(" ");
 }
 
-export default function RadarChart({ dimensions, size = 280, maxScore = 100, className = "" }: RadarChartProps) {
+export default function RadarChart({ dimensions, size = 280, maxScore = 100, className = "", t }: RadarChartProps) {
   const center = size / 2;
   const radius = size / 2 - 32;
   const total = dimensions.length;
@@ -39,7 +40,7 @@ export default function RadarChart({ dimensions, size = 280, maxScore = 100, cla
     return (
       <div className={`flex items-center justify-center rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900 ${className}`}
         style={{ width: size, height: size }}>
-        <p className="text-xs text-zinc-400">Need ≥3 dimensions</p>
+        <p className="text-xs text-zinc-400">{t ? t("report.radar.insufficientData") : "Need ≥3 dimensions"}</p>
       </div>
     );
   }

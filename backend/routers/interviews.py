@@ -190,6 +190,7 @@ async def get_session(session_id: str, db: AsyncSession = Depends(get_db)):
         "status": interview.status,
         "startedAt": interview.started_at.isoformat() if interview.started_at else None,
         "durationSeconds": interview.duration_seconds,
+        "audioUrl": interview.audio_url,  # 录音文件地址（可能为 None）
     }
 
 
@@ -382,7 +383,7 @@ async def finish_session(session_id: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/interviews/{session_id}/events")
 async def get_session_events(session_id: str, db: AsyncSession = Depends(get_db)):
-    """获取 VAR 时间轴事件。"""
+    """获取 VAR 时间轴事件，附带 AI 回复文本。"""
     try:
         sid = uuid.UUID(session_id)
     except ValueError:
@@ -399,6 +400,22 @@ async def get_session_events(session_id: str, db: AsyncSession = Depends(get_db)
     )
     events = result.scalars().all()
 
+    # 从 Redis 读取对话历史，为每个事件匹配 AI 回复
+    ai_responses: dict[str, str] = {}  # turn_id → ai 回复文本
+    try:
+        from services.cache_service import cache
+        raw = await cache.get(f"session:{session_id}")
+        if raw:
+            session_data = json.loads(raw)
+            history = session_data.get("history", [])
+            # history 是 [{role, content}, ...] 列表，按 user/assistant 交替
+            for idx, msg in enumerate(history):
+                if msg.get("role") == "assistant":
+                    turn_num = (idx // 2) + 1  # assistant 在第几个 turn
+                    ai_responses[f"turn_{turn_num:03d}"] = msg.get("content", "")
+    except Exception:
+        pass  # Redis 不可用时跳过
+
     return {
         "sessionId": session_id,
         "events": [{
@@ -407,6 +424,7 @@ async def get_session_events(session_id: str, db: AsyncSession = Depends(get_db)
             "startMs": e.start_ms, "endMs": e.end_ms,
             "transcriptSnippet": e.transcript_snippet, "evidence": e.evidence,
             "suggestion": e.suggestion, "displayPriority": e.display_priority,
+            "aiResponse": ai_responses.get(e.turn_id),  # AI 回复文本
         } for e in events],
     }
 

@@ -16,6 +16,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from config import settings
@@ -80,6 +81,11 @@ app.include_router(resumes.router)
 app.include_router(jobs.router)
 app.include_router(interviews.router)
 app.include_router(auth.router)
+
+# 静态文件：录音回放
+_static_audio_dir = os.path.join(os.path.dirname(__file__), "storage", "audio")
+os.makedirs(_static_audio_dir, exist_ok=True)
+app.mount("/api/audio", StaticFiles(directory=_static_audio_dir), name="audio_files")
 
 
 # ---------------------------------------------------------------------------

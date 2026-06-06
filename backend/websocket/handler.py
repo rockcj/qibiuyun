@@ -9,13 +9,18 @@
 """
 
 import asyncio
+import base64
 import json
+import os
 import re
+import struct
+import subprocess
 import time
 import uuid
 from typing import Optional
 
 from fastapi import WebSocket, WebSocketDisconnect
+import imageio_ffmpeg
 
 from config import settings
 from services.asr_service import EnergyVAD, asr_service
@@ -62,6 +67,11 @@ def _extract_tts_chunks(buffer: str) -> tuple[list[str], str]:
 class SessionState:
     """单个 WebSocket 会话的运行时状态。"""
 
+    # WAV 录音常量
+    _WAV_SAMPLE_RATE = 16000
+    _WAV_CHANNELS = 1
+    _WAV_BITS_PER_SAMPLE = 16
+
     def __init__(self, session_id: str, scene_config: Optional[dict] = None):
         self.session_id = session_id
         self.scene_config = scene_config or {}
@@ -107,6 +117,12 @@ class SessionState:
         # 静音检测延迟任务（debounce）
         self._silence_check_task: Optional[asyncio.Task] = None
 
+        # 录音文件：累积所有用户语音 PCM 数据写入 WAV
+        self._wav_file: Optional[object] = None
+        self._wav_path: str = ""
+        self._wav_data_size: int = 0
+        self._init_wav_recording()
+
     def add_to_history(self, role: str, content: str) -> None:
         self.history.append({"role": role, "content": content})
         # 最多保留 6 轮 (12 条消息)，避免上下文过长
@@ -120,6 +136,101 @@ class SessionState:
             "connectedAt": self.connected_at,
             "lastActivity": self.last_activity,
         }
+
+    # ------------------------------------------------------------------
+    # 录音：累积用户 PCM 音频写入 WAV 文件
+    # ------------------------------------------------------------------
+    def _init_wav_recording(self) -> None:
+        """创建录音目录并打开 WAV 文件，写入占位头部。"""
+        audio_dir = os.path.join(
+            os.path.dirname(os.path.dirname(__file__)), "storage", "audio"
+        )
+        os.makedirs(audio_dir, exist_ok=True)
+        self._wav_path = os.path.join(audio_dir, f"{self.session_id}.wav")
+        self._wav_file = open(self._wav_path, "wb")
+        # 写入占位 WAV 头部（数据大小最后回填）
+        self._wav_file.write(self._build_wav_header(0))
+        self._wav_data_size = 0
+        print(f"[WS] Recording started: {self._wav_path}")
+
+    def write_audio(self, pcm_bytes: bytes) -> None:
+        """追加 PCM 音频数据到 WAV 文件。"""
+        if self._wav_file is None:
+            return
+        self._wav_file.write(pcm_bytes)
+        self._wav_data_size += len(pcm_bytes)
+
+    def finalize_recording(self) -> Optional[str]:
+        """回填 WAV 头部并关闭文件，返回文件路径。"""
+        if self._wav_file is None:
+            return None
+        try:
+            # 回填正确的数据大小
+            self._wav_file.seek(0)
+            self._wav_file.write(self._build_wav_header(self._wav_data_size))
+            self._wav_file.close()
+            self._wav_file = None
+            # 如果有录音但数据太少（<1秒），删除文件
+            if self._wav_data_size < self._WAV_SAMPLE_RATE * 2:  # < 1 秒
+                os.remove(self._wav_path)
+                print(f"[WS] Recording discarded (too short): {self._wav_path}")
+                return None
+            print(
+                f"[WS] Recording finalized: {self._wav_path} "
+                f"({self._wav_data_size / (self._WAV_SAMPLE_RATE * 2):.1f}s)"
+            )
+            return self._wav_path
+        except Exception as exc:
+            print(f"[WS] Failed to finalize recording: {exc}")
+            return None
+
+    def write_tts_audio(self, mp3_base64: str) -> None:
+        """将 AI TTS 的 base64 MP3 解码为 PCM 并追加到 WAV 文件。"""
+        if self._wav_file is None:
+            return
+        try:
+            mp3_bytes = base64.b64decode(mp3_base64)
+            # 使用 ffmpeg 将 MP3 转为 16kHz mono 16-bit PCM
+            ffmpeg_exe = imageio_ffmpeg.get_ffmpeg_exe()
+            proc = subprocess.run(
+                [ffmpeg_exe, "-i", "pipe:0", "-f", "s16le",
+                 "-acodec", "pcm_s16le", "-ar", str(self._WAV_SAMPLE_RATE),
+                 "-ac", str(self._WAV_CHANNELS), "pipe:1"],
+                input=mp3_bytes, capture_output=True,
+                timeout=5,
+            )
+            if proc.returncode == 0 and proc.stdout:
+                pcm_data = proc.stdout
+                self._wav_file.write(pcm_data)
+                self._wav_data_size += len(pcm_data)
+        except Exception as exc:
+            print(f"[WS] TTS write failed: {exc}")
+
+    @staticmethod
+    def _build_wav_header(data_size: int) -> bytes:
+        """构建标准 WAV 文件头部（PCM 16bit mono 16kHz）。"""
+        sample_rate = SessionState._WAV_SAMPLE_RATE
+        channels = SessionState._WAV_CHANNELS
+        bits_per_sample = SessionState._WAV_BITS_PER_SAMPLE
+        byte_rate = sample_rate * channels * bits_per_sample // 8
+        block_align = channels * bits_per_sample // 8
+
+        return struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",
+            36 + data_size,
+            b"WAVE",
+            b"fmt ",
+            16,  # PCM
+            1,  # PCM format
+            channels,
+            sample_rate,
+            byte_rate,
+            block_align,
+            bits_per_sample,
+            b"data",
+            data_size,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -162,13 +273,18 @@ class ConnectionManager:
         print(f"[WS] Client connected: {session_id} (total: {self.active_connections})")
 
     async def disconnect(self, session_id: str) -> None:
-        """断开连接，持久化会话状态。"""
+        """断开连接，持久化会话状态并保存录音。"""
         self._connections.pop(session_id, None)
         state = self._states.pop(session_id, None)
 
         if state:
+            # 保存录音文件
+            wav_path = state.finalize_recording()
             # 保存会话状态到 Redis
             await self._save_session_state(state)
+            # 如果有录音，更新 DB 中的 audio_url
+            if wav_path:
+                await self._update_audio_url(session_id)
             duration = time.time() - state.connected_at
             print(
                 f"[WS] Client disconnected: {session_id} "
@@ -246,6 +362,7 @@ class ConnectionManager:
         # 只有语音帧才缓冲（过滤静音噪音）
         if is_speech:
             state.audio_buffer.extend(pcm_bytes)
+            state.write_audio(pcm_bytes)  # 累积录音
             state.last_audio_speech_time = time.time()
 
         buf_ms = len(state.audio_buffer) / 32
@@ -731,6 +848,8 @@ class ConnectionManager:
                         "payload": audio_b64,
                         "text": sentence,
                     })
+                    # 同时写入录音文件（AI 回复）
+                    state.write_tts_audio(audio_b64)
         finally:
             state.is_tts_active = False
         return sent
@@ -769,6 +888,8 @@ class ConnectionManager:
                         "payload": audio_b64,
                         "text": sentence,
                     })
+                    # 同时写入录音文件（AI 回复）
+                    state.write_tts_audio(audio_b64)
 
             if not sent_any:
                 print(f"[TTS] No audio generated, fallback signal sent {session_id[:8]}")
@@ -896,6 +1017,11 @@ class ConnectionManager:
         self, session_id: str, state: SessionState, message: dict
     ) -> dict:
         """处理 control.finish 消息。"""
+        # 保存录音
+        wav_path = state.finalize_recording()
+        if wav_path:
+            await self._update_audio_url(session_id)
+
         await self.send_message(session_id, {
             "type": "control.finish",
             "sessionId": session_id,
@@ -988,6 +1114,22 @@ class ConnectionManager:
     # ------------------------------------------------------------------
     # 状态持久化
     # ------------------------------------------------------------------
+    async def _update_audio_url(self, session_id: str) -> None:
+        """更新数据库中 Interview 的 audio_url 字段。"""
+        try:
+            from database import async_session_factory
+            from models.base import Interview
+
+            sid = uuid.UUID(session_id)
+            async with async_session_factory() as db:
+                interview = await db.get(Interview, sid)
+                if interview:
+                    interview.audio_url = f"/api/audio/{session_id}.wav"
+                    await db.commit()
+                    print(f"[WS] Audio URL updated: {session_id[:8]}")
+        except Exception as exc:
+            print(f"[WS] Failed to update audio_url: {exc}")
+
     async def _save_session_state(self, state: SessionState) -> None:
         """将会话状态保存到 Redis（用于重连恢复）。"""
         try:

@@ -18,6 +18,10 @@ interface SessionReportPanelProps {
   timelineEvents: SessionEventsResponse | null;
   reportStatus: "loading" | "generating" | "ready" | "error";
   onTimelineEventClick?: (event: TimelineEventItem) => void;
+  /** 当前高亮的事件 ID（音频播放跳转后） */
+  activeEventId?: string | null;
+  /** 是否有录音可回放 */
+  hasAudio?: boolean;
 }
 
 /** 严重程度标签样式 */
@@ -38,6 +42,8 @@ export default function SessionReportPanel({
   report,
   timelineEvents,
   reportStatus,
+  activeEventId,
+  hasAudio,
   onTimelineEventClick,
 }: SessionReportPanelProps) {
   const { t } = useLocale();
@@ -116,6 +122,7 @@ export default function SessionReportPanel({
                       key, label: t(`report.dimension.${key}` as never) ?? key, score,
                     }))}
                     size={240}
+                    t={t as (key: string) => string}
                   />
                 </div>
                 <div className="grid flex-1 grid-cols-2 gap-2 content-start">
@@ -187,7 +194,7 @@ export default function SessionReportPanel({
           <section className="mt-8">
             <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">{t("report.timeline")}</h2>
             <div className="mt-3">
-              <TimelineViewer events={timelineEvents.events} onEventClick={onTimelineEventClick} t={t as (key: string) => string} />
+              <TimelineViewer events={timelineEvents.events} onEventClick={onTimelineEventClick} t={t as (key: string) => string} activeEventId={activeEventId} hasAudio={hasAudio} />
             </div>
           </section>
         )}
@@ -263,7 +270,7 @@ export default function SessionReportPanel({
                       <td className="px-4 py-3">{row.wordsPerMinute}</td>
                       <td className="px-4 py-3">{row.pauseCount}</td>
                       <td className="px-4 py-3">
-                        {row.durationSeconds != null ? `${row.durationSeconds}s` : "—"}
+                        {row.durationSeconds != null ? `${row.durationSeconds}${t("report.seconds" as never)}` : "—"}
                       </td>
                       <td className="px-4 py-3">
                         {row.lowConfidenceWords.length > 0 ? (

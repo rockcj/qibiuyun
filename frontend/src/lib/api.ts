@@ -194,6 +194,19 @@ export async function finishSession(sessionId: string): Promise<{
   return res.json();
 }
 
+/** 获取会话详情（含 audioUrl） */
+export async function getInterviewDetail(
+  sessionId: string
+): Promise<import("@/types/api").SessionDetail> {
+  const res = await authFetch(`${API_BASE}/api/interviews/${sessionId}`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return res.json();
+}
+
 /** 获取课后发音/语法分析汇总 */
 export async function getSessionAnalysis(
   sessionId: string
