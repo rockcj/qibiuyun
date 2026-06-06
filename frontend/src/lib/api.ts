@@ -8,6 +8,7 @@ import type {
   ResumeUploadResponse,
   SceneFull,
   SessionAnalysisResponse,
+  SessionEventsResponse,
   SessionReportResponse,
 } from "@/types/api";
 
@@ -117,6 +118,19 @@ export async function getSessionReport(
   sessionId: string
 ): Promise<SessionReportResponse> {
   const res = await fetch(`${API_BASE}/api/interviews/${sessionId}/report`, {
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return res.json();
+}
+
+/** 获取 VAR 时间轴事件 */
+export async function getSessionEvents(
+  sessionId: string
+): Promise<SessionEventsResponse> {
+  const res = await fetch(`${API_BASE}/api/interviews/${sessionId}/events`, {
     cache: "no-store",
   });
   if (!res.ok) {

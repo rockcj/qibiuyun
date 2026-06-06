@@ -23,7 +23,7 @@ class ReportService:
         if summary is None:
             summary = {"corrections": [], "fillerCounts": {}, "pronunciation": []}
 
-        scene_score, dimension_scores, recommendation = self._compute_scores(summary)
+        scene_score, dimension_scores, recommendation = self._compute_scores(summary, scene)
 
         return {
             "reportId": f"rep_{session_id}",
@@ -40,9 +40,9 @@ class ReportService:
         }
 
     def _compute_scores(
-        self, summary: dict
+        self, summary: dict, scene: str = "interview"
     ) -> tuple[int, dict[str, int], str]:
-        """规则评分：发音、语法、流利度、自信度 → 场景总分。"""
+        """规则评分：基础维度 → 场景专属 rubrics。"""
         corrections = summary.get("corrections", [])
         filler_counts = summary.get("fillerCounts", {})
         pronunciation = summary.get("pronunciation", [])
@@ -97,13 +97,40 @@ class ReportService:
             + fluency_score * 0.30
         )
 
-        dimension_scores = {
+        # 基础维度（所有场景通用）
+        base_dimensions = {
             "english": english_score,
             "pronunciation": pronunciation_score,
             "grammar": grammar_score,
             "fluency": fluency_score,
             "confidence": confidence_score,
         }
+
+        # 根据场景 rubric 映射维度
+        from services.scene_service import get_scene
+        scene_config = get_scene(scene)
+        rubric = scene_config.get("rubric", []) if scene_config else []
+
+        dimension_scores: dict[str, int] = {}
+        for dim in rubric:
+            if dim in base_dimensions:
+                dimension_scores[dim] = base_dimensions[dim]
+            elif dim == "star":
+                dimension_scores[dim] = _clamp(0.5 * base_dimensions["english"] + 0.5 * base_dimensions["grammar"] - 5)
+            elif dim == "logic":
+                dimension_scores[dim] = _clamp(0.4 * base_dimensions["english"] + 0.6 * base_dimensions["grammar"])
+            elif dim == "technical":
+                dimension_scores[dim] = base_dimensions.get("grammar", 70)
+            elif dim in ("communication", "politeness", "functionalPhrases"):
+                dimension_scores[dim] = base_dimensions.get("english", 70)
+            elif dim == "taskCompletion":
+                dimension_scores[dim] = base_dimensions.get("pronunciation", 70)
+            elif dim == "meetingControl":
+                dimension_scores[dim] = base_dimensions.get("fluency", 70)
+            elif dim == "pronunciationFluency":
+                dimension_scores[dim] = _clamp(0.5 * base_dimensions.get("pronunciation", 70) + 0.5 * base_dimensions.get("fluency", 70))
+            else:
+                dimension_scores[dim] = 70
 
         scene_score = _clamp(
             english_score * 0.40

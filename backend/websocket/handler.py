@@ -830,6 +830,11 @@ class ConnectionManager:
                         "transcript": transcript,
                     })
 
+                    # 同时写入 TimelineEvent 到数据库（不阻塞主链路）
+                    asyncio.create_task(_save_grammar_timeline_event(
+                        session_id, turn_id, grammar_result, transcript
+                    ))
+
                 if grammar_result.spoken_tip:
                     await self.send_message(session_id, {
                         "type": "correction.light",
@@ -1032,6 +1037,45 @@ class ConnectionManager:
     @property
     def active_connections(self) -> int:
         return len(self._connections)
+
+
+async def _save_grammar_timeline_event(session_id: str, turn_id: str, grammar_result, transcript: str) -> None:
+    """写入语法错误时间轴事件到数据库（后台任务）。"""
+    from database import async_session_factory
+    from models.base import TimelineEvent
+    import uuid as _uuid
+
+    try:
+        interview_uuid = _uuid.UUID(session_id)
+    except ValueError:
+        return
+
+    try:
+        async with async_session_factory() as db:
+            turn_num = 0
+            if turn_id and turn_id.startswith("turn_"):
+                try:
+                    turn_num = int(turn_id.split("_")[-1])
+                except (ValueError, IndexError):
+                    pass
+            estimated_start_ms = max(0, turn_num * 30000 + 5000)
+            estimated_end_ms = estimated_start_ms + 15000
+
+            db.add(TimelineEvent(
+                interview_id=interview_uuid, turn_id=turn_id,
+                event_type="grammar_error",
+                severity=grammar_result.severity if grammar_result.severity != "none" else "minor",
+                title=f"Grammar: {grammar_result.original[:60]}",
+                description=f"Original: '{grammar_result.original}' → Corrected: '{grammar_result.corrected}'",
+                start_ms=estimated_start_ms, end_ms=estimated_end_ms,
+                transcript_snippet=transcript[:200] if transcript else "",
+                evidence={"original": grammar_result.original, "corrected": grammar_result.corrected, "tip": grammar_result.spoken_tip},
+                suggestion=grammar_result.spoken_tip,
+                display_priority=10 if grammar_result.severity == "serious" else 5,
+            ))
+            await db.commit()
+    except Exception as exc:
+        print(f"[WS] Failed to save timeline event: {exc}")
 
 
 # 全局单例

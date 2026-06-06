@@ -299,7 +299,7 @@ export interface SessionAnalysisResponse {
 
 /** 场景报告（GET /api/interviews/{id}/report） */
 export interface SessionReportResponse {
-  reportId: string;
+  reportId: string | null;
   sessionId: string;
   scene: string;
   scoreName: string;
@@ -308,4 +308,35 @@ export interface SessionReportResponse {
   finalRecommendation: string;
   highlights?: string[];
   improvements?: string[];
+  evidenceList?: EvidenceEntry[];
+  reportStatus?: "generating" | "ready" | "error";
+}
+
+/** 评分证据条目 */
+export interface EvidenceEntry {
+  dimension: string;
+  score: number;
+  evidence: string;
+}
+
+/** VAR 时间轴事件 */
+export interface TimelineEventItem {
+  eventId: string;
+  turnId: string;
+  eventType: string;
+  severity: "low" | "medium" | "high";
+  title: string;
+  description: string;
+  startMs: number;
+  endMs: number;
+  transcriptSnippet?: string;
+  evidence?: Record<string, unknown>;
+  suggestion?: string;
+  displayPriority?: number;
+}
+
+/** 时间轴事件列表响应 */
+export interface SessionEventsResponse {
+  sessionId: string;
+  events: TimelineEventItem[];
 }

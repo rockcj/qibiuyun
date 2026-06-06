@@ -2,12 +2,22 @@
 
 import Link from "next/link";
 import { useLocale } from "@/i18n/LocaleContext";
-import type { SessionAnalysisResponse, SessionReportResponse } from "@/types/api";
+import type {
+  SessionAnalysisResponse,
+  SessionEventsResponse,
+  SessionReportResponse,
+  TimelineEventItem,
+} from "@/types/api";
+import RadarChart from "./RadarChart";
+import TimelineViewer from "./TimelineViewer";
 
 interface SessionReportPanelProps {
   sessionId: string;
   analysis: SessionAnalysisResponse;
   report: SessionReportResponse | null;
+  timelineEvents: SessionEventsResponse | null;
+  reportStatus: "loading" | "generating" | "ready" | "error";
+  onTimelineEventClick?: (event: TimelineEventItem) => void;
 }
 
 /** 严重程度标签样式 */
@@ -26,6 +36,9 @@ export default function SessionReportPanel({
   sessionId,
   analysis,
   report,
+  timelineEvents,
+  reportStatus,
+  onTimelineEventClick,
 }: SessionReportPanelProps) {
   const { t } = useLocale();
 
@@ -67,62 +80,115 @@ export default function SessionReportPanel({
         </h1>
         <p className="mt-2 text-sm text-zinc-500">{t("report.subtitle")}</p>
 
-        {/* Offer Score */}
-        {report && (
+        {/* 报告生成中 */}
+        {reportStatus === "generating" && (
+          <section className="mt-6 rounded-2xl border border-amber-200 bg-amber-50 p-8 text-center dark:border-amber-800 dark:bg-amber-950/30">
+            <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-amber-500 border-t-transparent" />
+            <h2 className="text-lg font-semibold text-amber-800 dark:text-amber-200">{t("report.generating")}</h2>
+            <p className="mt-2 text-sm text-amber-700 dark:text-amber-300">{t("report.generatingHint")}</p>
+          </section>
+        )}
+
+        {/* 报告加载失败 */}
+        {reportStatus === "error" && (
+          <section className="mt-6 rounded-2xl border border-red-200 bg-red-50 p-6 text-center dark:border-red-800 dark:bg-red-950/30">
+            <p className="text-sm text-red-700 dark:text-red-300">{t("report.error")}</p>
+            <button onClick={() => window.location.reload()} className="mt-3 rounded-xl bg-red-500 px-4 py-2 text-sm font-medium text-white hover:bg-red-600">{t("report.retry")}</button>
+          </section>
+        )}
+
+        {/* Offer Score + 雷达图 */}
+        {report && reportStatus === "ready" && (
           <section className="mt-6 rounded-2xl border border-indigo-200 bg-indigo-50 p-6 dark:border-indigo-800 dark:bg-indigo-950/30">
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
-                <h2 className="text-lg font-semibold text-indigo-800 dark:text-indigo-200">
-                  {report.scoreName}
-                </h2>
-                <p className="mt-2 text-sm text-indigo-700 dark:text-indigo-300">
-                  {report.finalRecommendation}
-                </p>
+                <h2 className="text-lg font-semibold text-indigo-800 dark:text-indigo-200">{report.scoreName}</h2>
+                <p className="mt-2 text-sm text-indigo-700 dark:text-indigo-300">{report.finalRecommendation}</p>
               </div>
-              <p className="text-5xl font-bold text-indigo-600 dark:text-indigo-300">
-                {report.sceneScore}
-              </p>
+              <p className="text-5xl font-bold text-indigo-600 dark:text-indigo-300">{report.sceneScore}</p>
             </div>
-            {Object.keys(report.dimensionScores).length > 0 && (
+
+            {Object.keys(report.dimensionScores).length >= 3 && (
+              <div className="mt-6 flex flex-col items-center gap-4 sm:flex-row sm:items-start">
+                <div className="flex-shrink-0">
+                  <RadarChart
+                    dimensions={Object.entries(report.dimensionScores).map(([key, score]) => ({
+                      key, label: t(`report.dimension.${key}` as never) ?? key, score,
+                    }))}
+                    size={240}
+                  />
+                </div>
+                <div className="grid flex-1 grid-cols-2 gap-2 content-start">
+                  {Object.entries(report.dimensionScores).map(([key, score]) => (
+                    <div key={key} className="rounded-lg bg-white/70 px-3 py-2 dark:bg-indigo-900/30">
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t(`report.dimension.${key}` as never) ?? key}</p>
+                      <p className="text-lg font-bold text-indigo-700 dark:text-indigo-300">{score}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {Object.keys(report.dimensionScores).length > 0 && Object.keys(report.dimensionScores).length < 3 && (
               <div className="mt-4 flex flex-wrap gap-2">
                 {Object.entries(report.dimensionScores).map(([key, score]) => (
-                  <span
-                    key={key}
-                    className="rounded-full bg-white/80 px-3 py-1 text-xs font-medium text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200"
-                  >
-                    {key}: {score}
+                  <span key={key} className="rounded-full bg-white/80 px-3 py-1 text-xs font-medium text-indigo-800 dark:bg-indigo-900/50 dark:text-indigo-200">
+                    {t(`report.dimension.${key}` as never) ?? key}: {score}
                   </span>
                 ))}
               </div>
             )}
+
             {(report.highlights?.length || report.improvements?.length) ? (
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 {report.highlights && report.highlights.length > 0 && (
                   <div>
-                    <p className="text-xs font-semibold uppercase text-indigo-600 dark:text-indigo-300">
-                      {t("report.highlights")}
-                    </p>
+                    <p className="text-xs font-semibold uppercase text-indigo-600 dark:text-indigo-300">{t("report.highlights")}</p>
                     <ul className="mt-2 list-inside list-disc text-sm text-indigo-800 dark:text-indigo-200">
-                      {report.highlights.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
+                      {report.highlights.map((item) => <li key={item}>{item}</li>)}
                     </ul>
                   </div>
                 )}
                 {report.improvements && report.improvements.length > 0 && (
                   <div>
-                    <p className="text-xs font-semibold uppercase text-indigo-600 dark:text-indigo-300">
-                      {t("report.improvements")}
-                    </p>
+                    <p className="text-xs font-semibold uppercase text-indigo-600 dark:text-indigo-300">{t("report.improvements")}</p>
                     <ul className="mt-2 list-inside list-disc text-sm text-indigo-800 dark:text-indigo-200">
-                      {report.improvements.map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
+                      {report.improvements.map((item) => <li key={item}>{item}</li>)}
                     </ul>
                   </div>
                 )}
               </div>
             ) : null}
+          </section>
+        )}
+
+        {/* 证据列表 */}
+        {report?.evidenceList && report.evidenceList.length > 0 && (
+          <section className="mt-8">
+            <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">{t("report.evidence")}</h2>
+            <div className="mt-3 space-y-3">
+              {report.evidenceList.map((item) => (
+                <div key={item.dimension} className="rounded-xl border border-zinc-200 bg-white p-4 dark:border-zinc-800 dark:bg-zinc-900">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="rounded-full bg-indigo-100 px-2 py-0.5 text-[11px] font-medium text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300">
+                      {t(`report.dimension.${item.dimension}` as never) ?? item.dimension}
+                    </span>
+                    <span className="text-sm font-bold text-zinc-700 dark:text-zinc-300">{item.score}/100</span>
+                  </div>
+                  {item.evidence && <p className="text-sm text-zinc-600 dark:text-zinc-400">{item.evidence}</p>}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* VAR 时间轴 */}
+        {timelineEvents && (
+          <section className="mt-8">
+            <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">{t("report.timeline")}</h2>
+            <div className="mt-3">
+              <TimelineViewer events={timelineEvents.events} onEventClick={onTimelineEventClick} t={t as (key: string) => string} />
+            </div>
           </section>
         )}
 
