@@ -50,6 +50,17 @@ class Settings(BaseSettings):
     session_token_secret: str = "dev-secret-change-me"
     session_ttl_seconds: int = 7200
 
+    # ---- JWT 认证 ----
+    jwt_secret_key: str = ""  # 为空时回退到 session_token_secret
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
+    refresh_token_expire_days: int = 7
+
+    @property
+    def jwt_secret(self) -> str:
+        """JWT 签名密钥，优先使用 jwt_secret_key，回退到 session_token_secret。"""
+        return self.jwt_secret_key or self.session_token_secret
+
     # ---- DB ----
     database_url: str = "sqlite+aiosqlite:///./offergpt.db"
 

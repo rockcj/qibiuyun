@@ -2,9 +2,9 @@
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from auth.dependencies import get_current_user
 from database import get_db
 from exceptions import ApiError
 from models.base import Job, User
@@ -21,19 +21,11 @@ class CreateJobRequest(BaseModel):
     jdText: str = Field(..., min_length=10)
 
 
-async def _get_demo_user(db: AsyncSession) -> User:
-    """获取 MVP 演示用户。"""
-    result = await db.execute(select(User).where(User.email == "demo@offergpt.local"))
-    user = result.scalar_one_or_none()
-    if user is None:
-        raise ApiError("DEMO_USER_MISSING", "演示用户未初始化，请重启后端服务", 500)
-    return user
-
-
 @router.post("/jobs")
 async def create_job(
     req: CreateJobRequest,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     提交岗位 JD，解析并返回岗位画像。
@@ -45,10 +37,8 @@ async def create_job(
     except ValueError as exc:
         raise ApiError("JD_PARSE_FAILED", str(exc))
 
-    demo_user = await _get_demo_user(db)
-
     job = Job(
-        user_id=demo_user.id,
+        user_id=user.id,
         title=req.title.strip(),
         company=req.company.strip() or None,
         jd_text=req.jdText.strip(),

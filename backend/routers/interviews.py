@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from auth.dependencies import get_current_user
 from config import settings
 from database import get_db
 from exceptions import ApiError
@@ -65,15 +66,6 @@ def _build_websocket_url(session_id: str) -> str:
     return f"{ws_base.rstrip('/')}/ws/interviews/{session_id}"
 
 
-async def _get_demo_user(db: AsyncSession) -> User:
-    """获取 MVP 演示用户。"""
-    result = await db.execute(select(User).where(User.email == "demo@offergpt.local"))
-    user = result.scalar_one_or_none()
-    if user is None:
-        raise ApiError("DEMO_USER_MISSING", "演示用户未初始化，请重启后端服务", 500)
-    return user
-
-
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -81,6 +73,7 @@ async def _get_demo_user(db: AsyncSession) -> User:
 async def create_session(
     req: CreateSessionRequest,
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     创建训练会话，支持 interview / restaurant / meeting 场景。
@@ -149,10 +142,8 @@ async def create_session(
         "correctionPolicy": scene_config.get("correctionPolicy", {}),
     }
 
-    demo_user = await _get_demo_user(db)
-
     interview = Interview(
-        user_id=demo_user.id,
+        user_id=user.id,
         resume_id=resume_uuid,
         job_id=job_uuid,
         scene=req.scene,

@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { AuthProvider } from "@/contexts/AuthContext";
 import { LocaleProvider } from "@/i18n/LocaleContext";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import "./globals.css";
@@ -32,10 +33,12 @@ export default function RootLayout({
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <LocaleProvider>
-          {children}
-          <LanguageSwitcher />
-        </LocaleProvider>
+        <AuthProvider>
+          <LocaleProvider>
+            {children}
+            <LanguageSwitcher />
+          </LocaleProvider>
+        </AuthProvider>
       </body>
     </html>
   );

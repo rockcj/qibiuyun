@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from config import settings
 from database import init_db
 from exceptions import ApiError, api_error_handler, http_exception_handler, validation_exception_handler
-from routers import scenes, interviews, resumes, jobs
+from routers import scenes, interviews, resumes, jobs, auth
 from services.asr_service import asr_service
 from services.cache_service import cache
 from websocket.handler import ws_manager
@@ -79,19 +79,34 @@ app.include_router(scenes.router)
 app.include_router(resumes.router)
 app.include_router(jobs.router)
 app.include_router(interviews.router)
+app.include_router(auth.router)
 
 
 # ---------------------------------------------------------------------------
 # WebSocket endpoint
 # ---------------------------------------------------------------------------
 @app.websocket("/ws/interviews/{session_id}")
-async def websocket_endpoint(websocket: WebSocket, session_id: str):
+async def websocket_endpoint(websocket: WebSocket, session_id: str, token: str = ""):
     """
     Real-time voice conversation WebSocket.
 
     Receives audio.input frames, returns ASR partial/final,
     AI text/audio deltas, and correction/timeline events.
+
+    Query params:
+        token: JWT access token（demo 模式下可选，生产模式必须）
     """
+    # token 验证：demo 模式放行无 token 连接，生产模式拒绝
+    if not settings.demo_mode_enabled:
+        if not token:
+            await websocket.close(code=4001, reason="请先登录")
+            return
+        from auth.jwt import decode_token
+        payload = decode_token(token)
+        if payload is None or payload.get("type") != "access":
+            await websocket.close(code=4001, reason="登录已过期")
+            return
+
     await ws_manager.connect(websocket, session_id)
     try:
         while True:

@@ -1,10 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import { useLocale } from "@/i18n/LocaleContext";
+import { useAuth } from "@/contexts/AuthContext";
 import SceneCard, { type SceneCardData } from "@/components/SceneCard";
 
 export default function HomeContent({ scenes }: { scenes: SceneCardData[] }) {
   const { t } = useLocale();
+  const { user, isAuthenticated, logout } = useAuth();
 
   return (
     <div className="flex min-h-screen flex-col bg-gradient-to-b from-zinc-50 to-white dark:from-zinc-950 dark:to-black">
@@ -18,6 +21,29 @@ export default function HomeContent({ scenes }: { scenes: SceneCardData[] }) {
           </div>
           <nav className="flex items-center gap-4 text-sm text-zinc-500">
             <span className="hidden sm:inline">{t("header.subtitle")}</span>
+            {isAuthenticated ? (
+              <div className="flex items-center gap-3">
+                <span className="text-zinc-700 dark:text-zinc-300">
+                  {t("auth.welcome")}，{user?.name || user?.email}
+                </span>
+                <button
+                  onClick={() => {
+                    logout();
+                    window.location.href = "/";
+                  }}
+                  className="rounded-lg border border-zinc-300 px-3 py-1.5 text-xs font-medium text-zinc-600 transition-colors hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-400 dark:hover:bg-zinc-800"
+                >
+                  {t("auth.logout")}
+                </button>
+              </div>
+            ) : (
+              <Link
+                href="/login"
+                className="rounded-lg bg-indigo-500 px-4 py-1.5 text-xs font-semibold text-white shadow-sm transition-colors hover:bg-indigo-600"
+              >
+                {t("auth.login.submit")}
+              </Link>
+            )}
           </nav>
         </div>
       </header>

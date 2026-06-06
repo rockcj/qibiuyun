@@ -1,6 +1,7 @@
 """Database engine and session factory with SQLAlchemy async support."""
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import text
 from config import settings
 
 
@@ -53,6 +54,13 @@ async def init_db():
 
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # 迁移：为已有 users 表补充 hashed_password 列（避免 ALTER 失败阻塞启动）
+        try:
+            await conn.execute(
+                text("ALTER TABLE users ADD COLUMN IF NOT EXISTS hashed_password VARCHAR(255)")
+            )
+        except Exception:
+            pass  # SQLite 等不支持 IF NOT EXISTS，忽略
 
     # Seed demo user for MVP
     global DEMO_USER_ID

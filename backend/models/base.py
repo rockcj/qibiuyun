@@ -40,6 +40,7 @@ class User(Base):
     name = Column(String(100), nullable=True)
     avatar_url = Column(Text, nullable=True)
     plan = Column(String(50), default="free")
+    hashed_password = Column(String(255), nullable=True)  # NULL 兼容 demo 用户（不可通过密码登录）
     created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
     updated_at = Column(
         DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow

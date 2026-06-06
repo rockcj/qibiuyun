@@ -1,9 +1,9 @@
 """简历上传路由 – POST /api/resumes。"""
 
 from fastapi import APIRouter, Depends, File, UploadFile
-from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from auth.dependencies import get_current_user
 from database import get_db
 from exceptions import ApiError
 from models.base import Resume, User
@@ -17,19 +17,11 @@ from services.resume_service import (
 router = APIRouter(prefix="/api", tags=["resumes"])
 
 
-async def _get_demo_user(db: AsyncSession) -> User:
-    """获取 MVP 演示用户。"""
-    result = await db.execute(select(User).where(User.email == "demo@offergpt.local"))
-    user = result.scalar_one_or_none()
-    if user is None:
-        raise ApiError("DEMO_USER_MISSING", "演示用户未初始化，请重启后端服务", 500)
-    return user
-
-
 @router.post("/resumes")
 async def upload_resume(
     file: UploadFile = File(...),
     db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
 ):
     """
     上传简历文件（PDF/TXT），解析文本并提取结构化画像。
@@ -62,10 +54,8 @@ async def upload_resume(
     # 保存文件到本地存储
     file_url = save_resume_file(file_bytes, file.filename)
 
-    demo_user = await _get_demo_user(db)
-
     resume = Resume(
-        user_id=demo_user.id,
+        user_id=user.id,
         file_url=file_url,
         file_type=file_type,
         raw_text=raw_text,
