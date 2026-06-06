@@ -306,8 +306,11 @@ export interface SessionReportResponse {
   sceneScore: number;
   dimensionScores: Record<string, number>;
   finalRecommendation: string;
+  finalRecommendationEn?: string;
   highlights?: string[];
+  highlightsEn?: string[];
   improvements?: string[];
+  improvementsEn?: string[];
   evidenceList?: EvidenceEntry[];
   reportStatus?: "generating" | "ready" | "error";
 }

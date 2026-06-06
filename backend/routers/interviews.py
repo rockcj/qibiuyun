@@ -229,8 +229,11 @@ def _build_report_response(report: Report, session_id: str, scene: str) -> dict:
         "sceneScore": report.scene_score or 0,
         "dimensionScores": report.dimension_scores or {},
         "finalRecommendation": report_json.get("finalRecommendation", ""),
+        "finalRecommendationEn": report_json.get("finalRecommendationEn", ""),
         "highlights": report_json.get("highlights", []),
+        "highlightsEn": report_json.get("highlightsEn", []),
         "improvements": report_json.get("improvements", []),
+        "improvementsEn": report_json.get("improvementsEn", []),
         "evidenceList": evidence_list,
         "reportStatus": "ready",
     }
@@ -242,7 +245,8 @@ def _build_generating_response(session_id: str, scene: str) -> dict:
         "reportId": None, "sessionId": session_id, "scene": scene,
         "scoreName": "Offer Score" if scene == "interview" else "Scene Score",
         "sceneScore": 0, "dimensionScores": {}, "finalRecommendation": "",
-        "highlights": [], "improvements": [], "evidenceList": [],
+        "finalRecommendationEn": "", "highlights": [], "highlightsEn": [],
+        "improvements": [], "improvementsEn": [], "evidenceList": [],
         "reportStatus": "generating",
     }
 

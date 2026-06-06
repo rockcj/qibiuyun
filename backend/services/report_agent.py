@@ -16,7 +16,7 @@ def _get_api_key() -> str:
     return settings.deepseek_api_key or settings.llm_api_key
 
 
-SYSTEM_PROMPT_TEMPLATE = """You are an expert English speaking coach and assessor for OfferGPT.
+SYSTEM_PROMPT_TEMPLATE = """You are an expert English speaking coach and assessor for OfferGPT, serving Chinese-speaking learners.
 
 ## Scene: {scene_display}
 ## Rubric: {rubric_str}
@@ -24,27 +24,50 @@ SYSTEM_PROMPT_TEMPLATE = """You are an expert English speaking coach and assesso
 
 For each rubric dimension, assign score (0-100) AND concrete evidence from the session.
 
+## 语言要求（极其重要）
+- 所有面向用户的文本必须使用中文，包括：evidence（评分依据）、highlights、improvements、finalRecommendation
+- highlights、improvements、finalRecommendation 额外提供英文版本（加 En 后缀）
+- dimensionScores 中每个维度的 evidence 字段必须用中文撰写
+- 中英文内容应对应但不必逐字翻译，各自符合母语表达习惯
+
 Return ONLY valid JSON:
 {{
   "sceneScore": 78,
   "scoreName": "Offer Score",
   "dimensionScores": {{
-    "english": {{"score": 75, "evidence": "specific quote or observation"}}
+    "english": {{"score": 75, "evidence": "使用了较丰富的词汇，但存在少量语法错误如主谓一致问题"}}
   }},
-  "highlights": ["..."],
-  "improvements": ["..."],
-  "finalRecommendation": "...",
+  "highlights": ["回答结构清晰，使用了具体数据支撑观点"],
+  "highlightsEn": ["Clear answer structure with specific data to support points"],
+  "improvements": ["建议使用 STAR 方法组织行为面试回答，补充具体行动和量化结果"],
+  "improvementsEn": ["Use STAR method for behavioral questions — add specific actions and quantified results"],
+  "finalRecommendation": "整体表现不错，继续加强 STAR 结构化的回答能力，多用量化指标展示成果。",
+  "finalRecommendationEn": "Good overall performance. Continue strengthening STAR-structured responses with quantified outcomes.",
   "timelineEvents": [
+当用户回答行为面试题时，检查是否包含完整的 STAR 四要素：
+- S (Situation / 情境) — 当时是什么背景？在什么项目中？
+- T (Task / 任务) — 你需要完成什么目标？
+- A (Action / 行动) — 你个人采取了哪些具体行动？
+- R (Result / 结果) — 带来了什么可量化的成果？
+
+创建 star_missing 事件时，要求：
+- title: 用中文概括缺失了哪个要素，如"回答缺少具体行动细节"、"缺少量化结果"，不要用 "STAR: Missing X" 这种格式
+- description: 用友好的中文说明当前回答缺少了什么，为什么重要
+- suggestion: 必须包含完整的 STAR 四要素模板，用中文，每要素配一句具体示例，让用户知道怎么改。格式示例：
+  "💡 建议用 STAR 方法组织回答：\\nS (情境): 当时我负责 [具体项目]，遇到了 [具体问题]\\nT (任务): 我的目标是在 [时间] 内达成 [指标]\\nA (行动): 我做了 [具体动作1]、[具体动作2]，使用了 [技术/方法]\\nR (结果): 最终 [指标] 提升了 X%，获得了 [认可/奖励]"
+
+Return ONLY valid JSON (see format above). timelineEvents examples:
+[
     {{
       "turnId": "turn_002",
       "eventType": "star_missing",
       "severity": "medium",
-      "title": "STAR: Missing Situation",
-      "description": "...",
+      "title": "回答缺少具体行动细节",
+      "description": "你描述了项目的背景和目标，但没有说明你个人采取了哪些行动。面试官希望了解你的具体贡献。",
       "startMs": 45000,
       "endMs": 65000,
-      "transcriptSnippet": "...",
-      "suggestion": "..."
+      "transcriptSnippet": "用户的原始回答片段（英文）",
+      "suggestion": "💡 建议用 STAR 方法组织回答：\\nS (情境): 当时我负责推荐系统的性能优化，响应延迟高达 500ms\\nT (任务): 需要在 2 周内将响应时间降到 100ms 以内\\nA (行动): 我引入了 Redis 缓存层，重构了冷数据查询逻辑，并做了预加载优化\\nR (结果): 最终响应时间降到 80ms，用户留存率提升了 12%"
     }}
   ]
 }}"""
@@ -229,6 +252,12 @@ class ReportAgent:
                 "displayPriority": int(event.get("displayPriority", 0)),
             })
 
+        highlights_en = result.get("highlightsEn", []) if isinstance(result.get("highlightsEn"), list) else []
+        improvements_en = result.get("improvementsEn", []) if isinstance(result.get("improvementsEn"), list) else []
+        final_rec_en = result.get("finalRecommendationEn", "")
+        if not isinstance(final_rec_en, str):
+            final_rec_en = ""
+
         return {
             "sceneScore": int(scene_score),
             "scoreName": result.get("scoreName", "Offer Score"),
@@ -236,6 +265,9 @@ class ReportAgent:
             "highlights": highlights[:5],
             "improvements": improvements[:5],
             "finalRecommendation": final_rec,
+            "highlightsEn": highlights_en[:5],
+            "improvementsEn": improvements_en[:5],
+            "finalRecommendationEn": final_rec_en,
             "timelineEvents": cleaned_timeline[:5],
         }
 

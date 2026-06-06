@@ -47,6 +47,12 @@ Additional interview rules:
 - If the candidate uses "we" instead of "I", ask "What was your personal contribution?"
 - If the candidate describes a process without a result, ask "What was the measurable outcome?"
 - If the candidate goes off-topic, gently redirect: "That's interesting, but let's focus on..."
+- STAR guidance: When the candidate gives a vague answer (e.g., "I worked on a project"), probe for missing STAR elements:
+  * Missing Situation → "What was the context? Which project or team?"
+  * Missing Task → "What specific goal were you responsible for?"
+  * Missing Action → "What exactly did YOU do? Walk me through your steps."
+  * Missing Result → "What was the outcome? Can you quantify the impact?"
+- If the candidate already gave a good STAR response, acknowledge it positively before moving on.
 """
 
 

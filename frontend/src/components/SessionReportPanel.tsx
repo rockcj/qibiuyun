@@ -109,7 +109,12 @@ export default function SessionReportPanel({
             <div className="flex flex-wrap items-end justify-between gap-4">
               <div>
                 <h2 className="text-lg font-semibold text-indigo-800 dark:text-indigo-200">{report.scoreName}</h2>
-                <p className="mt-2 text-sm text-indigo-700 dark:text-indigo-300">{report.finalRecommendation}</p>
+                <p className="mt-2 text-sm text-indigo-700 dark:text-indigo-300">
+                  {report.finalRecommendation}
+                  {report.finalRecommendationEn && (
+                    <span className="mt-1 block text-xs text-indigo-400 dark:text-indigo-500">{report.finalRecommendationEn}</span>
+                  )}
+                </p>
               </div>
               <p className="text-5xl font-bold text-indigo-600 dark:text-indigo-300">{report.sceneScore}</p>
             </div>
@@ -127,9 +132,26 @@ export default function SessionReportPanel({
                 </div>
                 <div className="grid flex-1 grid-cols-2 gap-2 content-start">
                   {Object.entries(report.dimensionScores).map(([key, score]) => (
-                    <div key={key} className="rounded-lg bg-white/70 px-3 py-2 dark:bg-indigo-900/30">
-                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400">{t(`report.dimension.${key}` as never) ?? key}</p>
+                    <div key={key} className="group relative rounded-lg bg-white/70 px-3 py-2 dark:bg-indigo-900/30">
+                      <p className="text-[11px] text-zinc-500 dark:text-zinc-400 inline-flex items-center gap-1">
+                        {t(`report.dimension.${key}` as never) ?? key}
+                        {/* STAR 维度显示问号提示 */}
+                        {key === "star" && (
+                          <span className="inline-flex h-3.5 w-3.5 cursor-help items-center justify-center rounded-full bg-amber-400 text-[9px] font-bold text-white">?</span>
+                        )}
+                      </p>
                       <p className="text-lg font-bold text-indigo-700 dark:text-indigo-300">{score}</p>
+                      {/* STAR tooltip — hover 显示 */}
+                      {key === "star" && (
+                        <div className="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 -translate-x-1/2 rounded-lg bg-zinc-800 px-4 py-3 text-left text-[11px] leading-relaxed text-white shadow-xl opacity-0 transition-opacity group-hover:opacity-100 dark:bg-zinc-100 dark:text-zinc-800" style={{width:"240px"}}>
+                          <div className="mb-2 font-semibold text-amber-400">⭐ STAR 评分标准</div>
+                          <div><span className="font-bold text-indigo-300 dark:text-indigo-600">S</span> Situation（情境）— 项目背景、遇到的挑战</div>
+                          <div><span className="font-bold text-purple-300 dark:text-purple-600">T</span> Task（任务）— 你的目标、职责范围</div>
+                          <div><span className="font-bold text-pink-300 dark:text-pink-600">A</span> Action（行动）— 你采取的具体行动</div>
+                          <div><span className="font-bold text-amber-300 dark:text-amber-600">R</span> Result（结果）— 可量化的成果、影响</div>
+                          <div className="absolute left-1/2 top-full -translate-x-1/2 border-[6px] border-transparent border-t-zinc-800 dark:border-t-zinc-100"></div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -151,16 +173,30 @@ export default function SessionReportPanel({
                 {report.highlights && report.highlights.length > 0 && (
                   <div>
                     <p className="text-xs font-semibold uppercase text-indigo-600 dark:text-indigo-300">{t("report.highlights")}</p>
-                    <ul className="mt-2 list-inside list-disc text-sm text-indigo-800 dark:text-indigo-200">
-                      {report.highlights.map((item) => <li key={item}>{item}</li>)}
+                    <ul className="mt-2 space-y-2 text-sm text-indigo-800 dark:text-indigo-200">
+                      {report.highlights.map((item, i) => (
+                        <li key={i} className="flex flex-col">
+                          <span className="font-medium">{item}</span>
+                          {report.highlightsEn?.[i] && (
+                            <span className="text-xs text-indigo-400 dark:text-indigo-500">{report.highlightsEn[i]}</span>
+                          )}
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 )}
                 {report.improvements && report.improvements.length > 0 && (
                   <div>
                     <p className="text-xs font-semibold uppercase text-indigo-600 dark:text-indigo-300">{t("report.improvements")}</p>
-                    <ul className="mt-2 list-inside list-disc text-sm text-indigo-800 dark:text-indigo-200">
-                      {report.improvements.map((item) => <li key={item}>{item}</li>)}
+                    <ul className="mt-2 space-y-2 text-sm text-indigo-800 dark:text-indigo-200">
+                      {report.improvements.map((item, i) => (
+                        <li key={i} className="flex flex-col">
+                          <span className="font-medium">{item}</span>
+                          {report.improvementsEn?.[i] && (
+                            <span className="text-xs text-indigo-400 dark:text-indigo-500">{report.improvementsEn[i]}</span>
+                          )}
+                        </li>
+                      ))}
                     </ul>
                   </div>
                 )}
