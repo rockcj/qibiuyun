@@ -11,7 +11,7 @@ const VoiceSessionPanel = dynamic(
   {
     ssr: false,
     loading: () => (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-blue-50 via-indigo-50 to-white">
         <div className="text-center">
           <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
           <p className="text-sm text-zinc-500">加载语音会话…</p>
@@ -45,15 +45,15 @@ export default function SessionPage() {
 
   if (error) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-blue-50 via-indigo-50 to-white">
         <div className="text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100 text-2xl dark:bg-red-900/30">
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-red-100 text-2xl">
             ⚠️
           </div>
-          <p className="text-sm text-zinc-600 dark:text-zinc-400">{error}</p>
+          <p className="text-sm font-medium text-zinc-600">{error}</p>
           <a
             href="/"
-            className="mt-4 inline-block text-sm font-medium text-indigo-600 hover:text-indigo-500"
+            className="mt-4 inline-block text-sm font-semibold text-indigo-500 hover:text-indigo-600"
           >
             返回首页
           </a>
@@ -64,10 +64,10 @@ export default function SessionPage() {
 
   if (!session) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-zinc-50 dark:bg-zinc-950">
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-blue-50 via-indigo-50 to-white">
         <div className="text-center">
           <div className="mx-auto mb-4 h-10 w-10 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
-          <p className="text-sm text-zinc-500">加载会话…</p>
+          <p className="text-sm font-medium text-zinc-500">加载会话…</p>
         </div>
       </div>
     );

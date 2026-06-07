@@ -703,17 +703,19 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
   })();
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
+    <div className="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-b from-blue-50 via-indigo-50 to-white">
       {/* ---- Header ---- */}
-      <header className="border-b border-zinc-200 bg-white/80 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/80">
-        <div className="mx-auto flex h-16 max-w-4xl items-center justify-between px-6">
-          <Link href="/" className="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-white transition-colors">
+      <header className="relative border-b border-zinc-200/60 bg-white/70 backdrop-blur-xl">
+        <div className="absolute bottom-0 left-0 right-0 h-0.5"
+          style={{ background: "linear-gradient(90deg, #6366f1 0%, #a855f7 25%, #f59e0b 50%, #10b981 75%, #6366f1 100%)", backgroundSize: "200% 100%", animation: "gradientFlow 6s ease infinite" }} />
+        <div className="mx-auto flex h-16 max-w-5xl items-center justify-between px-6">
+          <Link href="/" className="text-sm font-medium text-zinc-500 hover:text-indigo-500 transition-colors">
             {t("scene.backHome")}
           </Link>
           <div className="flex items-center gap-4">
             {/* 语气词计数器 */}
             {Object.keys(fillerCounts).length > 0 && (
-              <span className="text-xs text-zinc-400">
+              <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-500">
                 {Object.entries(fillerCounts)
                   .filter(([, c]) => c > 0)
                   .map(([w, c]) => `${w}:${c}`)
@@ -721,22 +723,22 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
               </span>
             )}
             {!correctionEnabled && (
-              <span className="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
+              <span className="rounded-full bg-amber-100 px-2.5 py-0.5 text-xs font-semibold text-amber-700">
                 {t("voice.correctionPausedBadge")}
               </span>
             )}
             {turnPhase !== "listening" && !isAiSpeaking && (
-              <span className="text-xs text-amber-500 animate-pulse">
+              <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-600 animate-pulse">
                 {turnPhase === "user_turn" ? t("voice.processing") : t("voice.aiSpeaking")}
               </span>
             )}
             {isAiSpeaking && (
-              <span className="text-xs text-indigo-500 animate-pulse">
+              <span className="rounded-full bg-indigo-50 px-2.5 py-0.5 text-xs font-medium text-indigo-500 animate-pulse">
                 {t("voice.aiSpeaking")}
               </span>
             )}
             <StatusBadge status={derivedStatus} />
-            <span className="text-xs text-zinc-400">
+            <span className="rounded-full bg-zinc-100 px-2.5 py-0.5 text-xs font-medium text-zinc-500">
               {t("session.id")}: {session.sessionId.slice(0, 8)}…
             </span>
           </div>
@@ -744,14 +746,14 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
       </header>
 
       {/* ---- 聊天区 ---- */}
-      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-6">
+      <main className="relative mx-auto flex w-full max-w-5xl flex-1 flex-col px-6">
         <div ref={chatContainerRef} className="flex-1 space-y-3 overflow-y-auto py-6">
 
           {/* 实时 ASR 字幕 */}
           {streamingUserText && (
             <div className="flex justify-end">
-              <div className="max-w-[80%] rounded-2xl rounded-br-md bg-indigo-400/60 px-4 py-2.5 text-sm text-white">
-                <p className="mb-0.5 text-xs font-medium opacity-70">🎤 {t("voice.userSaid")}</p>
+              <div className="max-w-[80%] rounded-2xl rounded-br-md bg-gradient-to-r from-indigo-400 to-indigo-500 px-4 py-2.5 text-sm text-white shadow-md">
+                <p className="mb-0.5 text-xs font-medium opacity-80">🎤 {t("voice.userSaid")}</p>
                 {streamingUserText}
               </div>
             </div>
@@ -760,17 +762,17 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
           {/* 空状态 */}
           {turns.length === 0 && !streamingUserText && (
             <div className="py-20 text-center">
-              <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-indigo-100 text-2xl dark:bg-indigo-900/30">
+              <div className="mx-auto mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-gradient-to-br from-indigo-50 to-purple-50 text-3xl shadow-sm">
                 🎙️
               </div>
-              <p className="text-sm text-zinc-500">{statusText}</p>
+              <p className="text-sm font-medium text-zinc-500">{statusText}</p>
               {inputMode === "voice" && derivedStatus === "mic_ready" && (
-                <p className="mx-auto mt-3 max-w-sm text-xs text-amber-600 dark:text-amber-400">
+                <p className="mx-auto mt-3 max-w-sm text-xs font-medium text-amber-500">
                   {t("voice.englishOnlyTip")}
                 </p>
               )}
               {micError && (
-                <p className="mt-2 text-xs text-amber-600 dark:text-amber-400">{micError}</p>
+                <p className="mt-2 text-xs font-medium text-amber-500">{micError}</p>
               )}
             </div>
           )}
@@ -782,8 +784,8 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
               <div key={turn.id} className="space-y-2">
                 {/* 用户消息 — 立即出现 */}
                 <div className="flex justify-end">
-                  <div className="max-w-[80%] rounded-2xl rounded-br-md bg-indigo-500 px-4 py-2.5 text-sm text-white">
-                    <p className="mb-0.5 text-xs font-medium opacity-70">{t("voice.userSaid")}</p>
+                  <div className="max-w-[80%] rounded-2xl rounded-br-md bg-gradient-to-r from-indigo-500 to-purple-500 px-4 py-2.5 text-sm text-white shadow-sm">
+                    <p className="mb-0.5 text-xs font-medium opacity-80">{t("voice.userSaid")}</p>
                     {turn.userText}
                   </div>
                 </div>
@@ -792,16 +794,16 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
                 {(isStreaming ? streamingAiText : turn.aiText) && (
                   <div className="flex justify-start">
                     <div
-                      className={`max-w-[80%] rounded-2xl rounded-bl-md px-4 py-2.5 text-sm shadow-sm ${
+                      className={`max-w-[80%] rounded-2xl rounded-bl-md px-4 py-2.5 text-sm ${
                         isStreaming
-                          ? "bg-indigo-50 text-zinc-700 dark:bg-indigo-900/20 dark:text-zinc-300"
-                          : "bg-white text-zinc-800 dark:bg-zinc-800 dark:text-zinc-200"
+                          ? "bg-indigo-50 text-zinc-700 shadow-sm"
+                          : "bg-white text-zinc-800 shadow-sm border border-zinc-100"
                       }`}
                     >
                       <p className="mb-0.5 text-xs font-medium text-zinc-400">{t("voice.aiReplied")}</p>
                       {isStreaming ? streamingAiText : turn.aiText}
                       {isStreaming && (
-                        <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-indigo-500" />
+                        <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse rounded-full bg-indigo-500" />
                       )}
                     </div>
                   </div>
@@ -810,11 +812,11 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
                 {/* 轻纠正 */}
                 {turn.correction && (
                   <div className="flex justify-center">
-                    <div className="max-w-[90%] rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-800 dark:border-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                    <div className="max-w-[90%] rounded-xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800 shadow-sm">
                       <span className="font-semibold">{t("voice.correction")}: </span>
-                      <span className="line-through">{turn.correction.original}</span>
+                      <span className="line-through opacity-60">{turn.correction.original}</span>
                       {" → "}
-                      <span className="font-medium text-emerald-700 dark:text-emerald-400">
+                      <span className="font-semibold text-emerald-600">
                         {turn.correction.corrected}
                       </span>
                     </div>
@@ -828,7 +830,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
         </div>
 
         {/* ---- 底部输入 ---- */}
-        <div className="sticky bottom-0 border-t border-zinc-200 bg-white/90 py-4 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/90">
+        <div className="sticky bottom-0 border-t border-zinc-200/60 bg-white/80 py-4 backdrop-blur-xl">
           {/* 会话提示条 */}
           {sessionNotice && (
             <div className="mb-3">
@@ -847,20 +849,21 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
             </div>
           )}
 
+          <div className="mx-auto max-w-5xl">
           <div className="mb-3 flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="flex gap-2">
+              <div className="flex gap-1.5 rounded-full bg-zinc-100 p-0.5">
               <button onClick={switchToText}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all ${
                   inputMode === "text"
-                    ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
-                    : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400"
+                    ? "bg-white text-indigo-600 shadow-sm"
+                    : "text-zinc-500 hover:text-zinc-700"
                 }`}>{t("voice.textMode")}</button>
               <button onClick={switchToVoice}
-                className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
+                className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all ${
                   inputMode === "voice"
-                    ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
-                    : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400"
+                    ? "bg-white text-indigo-600 shadow-sm"
+                    : "text-zinc-500 hover:text-zinc-700"
                 }`}>{t("voice.audioMode")}</button>
               </div>
               {/* 实时轻纠正开关 */}
@@ -870,9 +873,9 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
                     type="checkbox"
                     checked={correctionEnabled}
                     onChange={toggleCorrection}
-                    className="h-3.5 w-3.5 rounded border-zinc-300 text-indigo-500 focus:ring-indigo-500"
+                    className="h-3.5 w-3.5 rounded border-zinc-300 text-indigo-500 focus:ring-2 focus:ring-indigo-200"
                   />
-                  <span className="text-xs text-zinc-500">{t("config.lightCorrection")}</span>
+                  <span className="text-xs font-medium text-zinc-500">{t("config.lightCorrection")}</span>
                 </label>
                 <p className="pl-5 text-[10px] leading-snug text-zinc-400">
                   {correctionEnabled
@@ -882,7 +885,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
               </div>
             </div>
             <button onClick={handleEndSession} disabled={isEnding}
-              className="rounded-full bg-red-500 px-4 py-1.5 text-xs font-medium text-white transition-colors hover:bg-red-600 disabled:opacity-50">
+              className="rounded-full bg-red-500 px-5 py-2 text-xs font-semibold text-white shadow-md shadow-red-200 transition-all hover:bg-red-600 hover:shadow-lg disabled:opacity-50">
               {isEnding ? t("voice.ending") : t("voice.endSession")}
             </button>
           </div>
@@ -895,10 +898,10 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
                 onKeyDown={handleKeyDown}
                 placeholder={t("voice.typeMessage")}
                 disabled={wsStatus !== "connected"}
-                className="flex-1 rounded-xl border border-zinc-300 bg-white px-4 py-2.5 text-sm text-zinc-900 placeholder-zinc-400 focus:border-indigo-400 focus:outline-none focus:ring-1 focus:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-100" />
+                className="flex-1 rounded-2xl border border-zinc-200 bg-white px-4 py-3 text-sm text-zinc-900 placeholder-zinc-400 transition-colors focus:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-100 disabled:cursor-not-allowed disabled:opacity-50" />
               <button onClick={sendTextMessage}
                 disabled={!textInput.trim() || wsStatus !== "connected"}
-                className="rounded-xl bg-indigo-500 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-50">
+                className="rounded-2xl bg-gradient-to-r from-indigo-500 to-purple-500 px-5 py-3 text-sm font-semibold text-white shadow-md shadow-indigo-200 transition-all hover:shadow-lg hover:scale-[1.02] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100">
                 {t("voice.send")}
               </button>
             </div>
@@ -909,14 +912,14 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
             <div className="flex items-center justify-center gap-4">
               <button onClick={toggleMic}
                 disabled={micStatus === "denied" || turnPhase !== "listening" || isAiSpeaking}
-                className={`flex h-14 w-14 items-center justify-center rounded-full text-xl transition-all ${
+                className={`flex h-16 w-16 items-center justify-center rounded-full text-xl transition-all duration-300 ${
                   isRecording
-                    ? "animate-pulse bg-red-500 text-white shadow-lg shadow-red-500/30"
-                    : "bg-indigo-500 text-white shadow-lg hover:bg-indigo-600"
-                } disabled:cursor-not-allowed disabled:bg-zinc-300 dark:disabled:bg-zinc-700`}>
+                    ? "animate-pulse bg-red-500 text-white shadow-xl shadow-red-300"
+                    : "bg-gradient-to-br from-indigo-500 to-purple-500 text-white shadow-xl shadow-indigo-200 hover:scale-105 hover:shadow-2xl"
+                } disabled:cursor-not-allowed disabled:bg-zinc-200 disabled:shadow-none disabled:hover:scale-100`}>
                 {isRecording ? "⏹" : "🎤"}
               </button>
-              <span className="text-xs text-zinc-500">
+              <span className="text-sm font-medium text-zinc-500">
                 {isAiSpeaking || turnPhase === "ai_speaking"
                   ? t("voice.aiSpeaking")
                   : turnPhase === "user_turn"
@@ -929,6 +932,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
               </span>
             </div>
           )}
+          </div>
         </div>
       </main>
 
