@@ -16,6 +16,16 @@
   <sub>🏆 七牛云 × XEngineer 暑期实训营 · 题目一：AI 英语口语陪练</sub>
 </p>
 
+<p align="center">
+  <a href="https://www.bilibili.com/video/BV16EEh6KEZH/?vd_source=6d0938da6ac62bc2f39a909715c6df88" target="_blank">
+    <img src="https://img.shields.io/badge/🎬_Demo_演示视频_①-FB7299?style=for-the-badge" alt="Demo 视频 1">
+  </a>
+  &nbsp;&nbsp;
+  <a href="https://www.bilibili.com/video/BV1ZHEh6PEB3/?vd_source=962ce82152a276fa6c073130731c851b" target="_blank">
+    <img src="https://img.shields.io/badge/🎬_Demo_演示视频_②-00A1D6?style=for-the-badge" alt="Demo 视频 2">
+  </a>
+</p>
+
 ---
 
 ## 环境要求
