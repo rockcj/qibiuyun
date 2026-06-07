@@ -23,10 +23,10 @@ out/
 *.swp
 *.swo
 
-# Env (keep example)
+# Env (keep docker template)
 .env
 .env.*
-!.env.example
+!.env.docker
 .env.local
 .env.production
 

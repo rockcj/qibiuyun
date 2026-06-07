@@ -2,33 +2,92 @@
 
 AI Real-Scene English Speaking Coach — 在真实场景中与 AI 角色对话，实时纠正发音/语法，生成可量化的口语成长报告。
 
+## 环境要求
+
+| 依赖 | 最低版本 | 推荐版本 | 说明 |
+|------|---------|---------|------|
+| Node.js | >= 20.x | 22 LTS | 前端运行环境 |
+| Python | >= 3.11 | 3.12 | 后端运行环境 |
+| PostgreSQL | >= 15 | 16 | 生产数据库 |
+| Redis | >= 7 | 7 | 缓存与会话状态 |
+| Docker | >= 24 | 27 | 一键启动基础设施（可选） |
+
 ## 快速启动
 
-### 后端 (FastAPI)
+### 方式一：Docker 一键启动（推荐）
 
 ```bash
+# 1. 配置环境变量
+cp .env.docker .env.local
+
+# 2. 启动 PostgreSQL + Redis
+docker-compose up -d
+
+# 3. 安装后端依赖并启动
 cd backend
 pip install -r requirements.txt
-python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
-```
+python main.py
 
-API 文档：http://localhost:8000/docs
-
-### 前端 (Next.js)
-
-```bash
+# 4. 另开终端，安装前端依赖并启动
 cd frontend
 npm install
 npm run dev
 ```
 
-前端页面：http://localhost:3000
+启动后：
+- 前端页面：http://localhost:3000
+- 后端 API 文档：http://localhost:8000/docs
+- **离线 Demo 报告页**：http://localhost:3000/demo
+
+### 方式二：手动启动（开发模式，使用 SQLite）
+
+```bash
+# 后端
+cd backend
+pip install -r requirements.txt
+python main.py
+
+# 前端
+cd frontend
+npm install
+npm run dev
+```
+
+> 开发模式无需 PostgreSQL/Redis，后端自动使用 SQLite + 内存缓存。设置 `DEMO_MODE_ENABLED=true` 可跳过登录。
 
 ### 数据库
 
 - 开发环境使用 SQLite（自动创建 `backend/offergpt.db`）
-- 生产环境切换到 PostgreSQL：修改 `backend/.env` 中的 `DATABASE_URL`
+- 生产/Docker 环境使用 PostgreSQL（通过 `DATABASE_URL` 配置）
 - 迁移脚本：`backend/migrations/001_init.sql`
+- 启动时自动建表和种子数据（demo 用户 + demo 会话）
+
+## Demo 演示模式
+
+项目预置了完整的演示数据，可用于无后端离线展示：
+
+- **访问 Demo 页面**：打开 `http://localhost:3000/demo`，可查看完整面试报告（雷达图、VAR 时间轴、对话回放）
+- **三层降级策略**：
+  1. 在线模式 → 从后端 `/api/demo` 获取最新数据
+  2. 离线模式 → 从浏览器 localStorage 缓存加载
+  3. 完全离线 → 使用前端内置静态兜底数据
+- **Demo 会话**：`demo_interview_001`，Backend Engineer 面试场景，含 5 轮英文对话、3 项亮点、3 条改进建议
+- **Demo 用户**：`demo@offergpt.local`（无需密码，适用于 DEMO_MODE）
+
+## 降级路径
+
+| 故障场景 | 降级方案 | 用户提示 |
+|---------|---------|---------|
+| 无麦克风 | 自动/手动切换到文本输入模式 | "麦克风权限被拒绝，请检查浏览器设置" |
+| WebSocket 断开 | 自动重连 3 次（间隔 3s），恢复会话状态 | "连接断开，正在重连…（第 N/3 次）" |
+| ASR 不可用 | 自动切为文本输入 | "语音识别暂不可用，已切换为文本输入模式" |
+| TTS 不可用 | 浏览器 speechSynthesis 朗读 | "已切换为浏览器内置语音朗读" |
+| 后端不可用 | /demo 页面使用 localStorage 缓存 | "Demo 演示数据 — 离线缓存模式" |
+| 完全离线 | /demo 页面使用静态兜底数据 | "Demo 演示数据 — 离线可用（静态数据）" |
+| LLM 报告生成失败 | 规则引擎兜底评分 | 后端自动处理，用户无感知 |
+| Redis 不可用 | 自动降级为内存缓存 | 后端自动处理，用户无感知 |
+
+所有错误提示均为中文，前端通过全局 Toast 统一展示。
 
 ## 项目结构
 
@@ -70,6 +129,82 @@ qibiuyun/
 - **LLM**：DeepSeek V4 Pro（流式对话）
 - **ASR/TTS**：本地 Whisper + EdgeTTS（免费方案已接入）
 
+## 第三方依赖说明
+
+> 依据项目规则：引用第三方库、框架或模板，必须在 README 中说明来源与用途。
+> 除下表所列第三方依赖外，其余全部代码均为原创实现。
+
+### 后端依赖（Python）
+
+| 包名 | 版本 | 用途 | 来源 |
+|------|------|------|------|
+| fastapi | 0.115.6 | Web 框架，提供 REST API 和 WebSocket 支持 | 第三方开源 (MIT) |
+| uvicorn | 0.34.0 | ASGI 服务器，运行 FastAPI 应用 | 第三方开源 (BSD) |
+| sqlalchemy | 2.0.36 | 异步 ORM，数据库模型与查询 | 第三方开源 (MIT) |
+| asyncpg | 0.30.0 | PostgreSQL 异步驱动（生产环境） | 第三方开源 (Apache 2.0) |
+| aiosqlite | 0.20.0 | SQLite 异步驱动（开发环境兜底） | 第三方开源 (MIT) |
+| psycopg2-binary | 2.9.10 | PostgreSQL 同步驱动（迁移脚本使用） | 第三方开源 (LGPL) |
+| redis | 5.2.1 | Redis 客户端，缓存与会话状态 | 第三方开源 (MIT) |
+| pydantic | 2.10.3 | 数据校验与序列化 | 第三方开源 (MIT) |
+| pydantic-settings | 2.7.0 | 环境变量加载与配置管理 | 第三方开源 (MIT) |
+| python-dotenv | 1.0.1 | `.env` 文件解析 | 第三方开源 (BSD) |
+| httpx | 0.28.1 | 异步 HTTP 客户端（调用 LLM API / TTS） | 第三方开源 (BSD) |
+| websockets | 14.1 | WebSocket 协议支持 | 第三方开源 (BSD) |
+| python-multipart | 0.0.19 | 表单/文件上传解析 | 第三方开源 (Apache 2.0) |
+| python-jose | ≥3.3.0 | JWT 令牌创建与验证 | 第三方开源 (MIT) |
+| bcrypt | ≥4.0.0 | 密码哈希 | 第三方开源 (Apache 2.0) |
+| email-validator | ≥2.0.0 | 邮箱格式校验 | 第三方开源 (Unlicense) |
+| openai-whisper | 20250625 | 本地语音识别 (ASR) | 第三方开源 (MIT, OpenAI) |
+| torch | ≥2.0.0 | 深度学习框架（Whisper 依赖） | 第三方开源 (BSD, Meta) |
+| numpy | ≥1.26.0 | 数值计算（音频处理） | 第三方开源 (BSD) |
+| edge-tts | 6.1.12 | 微软 Edge 在线文字转语音 | 第三方开源 (GPLv3) |
+| pypdf | 5.1.0 | PDF 文件文本提取 | 第三方开源 (BSD) |
+| openai | 2.41.0 | OpenAI SDK（兼容 DeepSeek API 调用） | 第三方开源 (Apache 2.0) |
+| tos | ≥2.6.0 | 火山引擎对象存储 SDK（音频文件存储） | 火山引擎云服务 SDK |
+| alembic | 1.14.0 | 数据库迁移工具（已安装，当前使用原始 SQL） | 第三方开源 (MIT) |
+
+### 前端依赖（Node.js）
+
+| 包名 | 版本 | 用途 | 来源 |
+|------|------|------|------|
+| next | 16.2.6 | React 全栈框架（App Router + Turbopack） | 第三方开源 (MIT, Vercel) |
+| react | 19.2.4 | UI 组件库 | 第三方开源 (MIT, Meta) |
+| react-dom | 19.2.4 | React DOM 渲染 | 第三方开源 (MIT, Meta) |
+| tailwindcss | ^4 | 原子化 CSS 框架 | 第三方开源 (MIT) |
+| @tailwindcss/postcss | ^4 | Tailwind CSS v4 PostCSS 插件 | 第三方开源 (MIT) |
+| typescript | ^5 | JavaScript 类型检查 | 第三方开源 (Apache 2.0, Microsoft) |
+| eslint | ^9 | JavaScript/TypeScript 代码检查 | 第三方开源 (MIT) |
+| eslint-config-next | 16.2.6 | Next.js 项目 ESLint 预设规则 | 第三方开源 (MIT, Vercel) |
+
+> **说明**：前端未使用任何第三方 UI 组件库（如 MUI、Ant Design、shadcn/ui），所有界面组件（RadarChart、TimelineViewer、Sidebar、Toast 等）均为纯原创实现。状态管理仅使用 React Context，未引入 Redux/Zustand 等第三方状态库。国际化自建 `LocaleContext`，未使用 i18next 等第三方库。
+
+### 基础设施
+
+| 软件 | 最低版本 | 用途 | 来源 |
+|------|----------|------|------|
+| PostgreSQL | 15 | 关系型数据库 | 第三方开源 (PostgreSQL License) |
+| Redis | 7 | 内存缓存与会话状态 | 第三方开源 (BSD) |
+| Docker | 24 | 容器化运行基础设施 | 第三方 (Docker Inc.) |
+
+### LLM / AI 服务
+
+| 服务 | 模型 | 用途 | 来源 |
+|------|------|------|------|
+| DeepSeek API | deepseek-v4-flash | 实时对话生成（流式） | 第三方云服务 (DeepSeek) |
+| DeepSeek API | deepseek-v4-pro | 报告生成与结构化分析 | 第三方云服务 (DeepSeek) |
+| EdgeTTS | en-US-JennyNeural | 在线文字转语音 | 第三方云服务 (Microsoft) |
+| 火山引擎 TOS | — | 音频文件对象存储 | 第三方云服务 (字节跳动) |
+
+### 原创代码范围
+
+以下模块为**完全原创实现**，不依赖第三方框架或模板：
+
+- **Agent 系统**：Grammar Agent（规则引擎 + LLM 增强）、Pronunciation Agent（WPM/停顿/置信度计算）、Report Agent（场景报告生成）、ASR Filter（8 层过滤）
+- **实时语音管线**：EnergyVAD（能量语音活动检测）、ConnectionManager（WebSocket 消息路由）、Turn Manager（轮流对话状态机）
+- **前端组件**：VoiceSessionPanel（实时对话面板）、SessionReportPanel（报告面板）、RadarChart（SVG 雷达图）、TimelineViewer（VAR 时间轴）、TranscriptReplayPanel（音频回放）
+- **业务服务**：SceneService（三场景配置）、ConversationService（场景 Prompt 编排）、ResumeService（简历解析）、JobService（JD 解析）
+- **降级系统**：三层 Demo 降级（API → localStorage → 静态数据）、WebSocket 断线重连、Redis → 内存缓存自动切换
+
 ## Step 4：实时轻纠正 & 异步发音/语法分析
 
 ### 原创功能说明
@@ -93,3 +228,27 @@ qibiuyun/
 ```bash
 python -m pytest tests/backend/test_grammar_agent.py tests/backend/test_pronunciation_agent.py tests/backend/test_websocket_handler.py -v
 ```
+
+## Step 5-6：Demo 稳定性打磨与降级路径
+
+### 新增功能
+
+- **预置 Demo 数据**（`backend/database.py`）：启动时自动种子 `demo_interview_001` 完整会话（transcript + report + VAR 事件）
+- **`/demo` 离线路由**（`frontend/src/app/demo/page.tsx`）：三层降级策略（API → localStorage → 静态数据），无需后端即可展示完整报告
+- **WebSocket 断线重连 UI**（`frontend/src/hooks/useWebSocket.ts`）：断开时显示"连接断开，正在重连…（第 N/3 次）"，自动恢复会话状态
+- **全局 Toast 通知**（`frontend/src/contexts/ToastContext.tsx`）：统一的错误/警告/成功/信息提示，5 秒自动消失
+- **Docker 一键部署**（`docker-compose.yml`）：PostgreSQL 16 + Redis 7，3 分钟内启动完整系统
+- **环境清单 + 降级路径文档**（README.md）
+
+### 比赛现场检查清单
+
+| # | 检查项 | 验证方式 |
+|---|--------|---------|
+| 1 | 首页三个场景入口均可点击 | 点击 interview/restaurant/meeting 卡片，进入场景配置页 |
+| 2 | 面试场景完成简历+JD上传 | 上传 PDF/TXT 简历 + 粘贴 JD，点击"开始面试"进入对话 |
+| 3 | 无麦克风切换到文本模式 | 拒绝麦克风权限 → 自动显示文本输入框 → 输入英文 → AI 回复 |
+| 4 | WebSocket 断线重连 | 对话中关闭网络 → 显示"连接断开，正在重连…" → 5 秒内恢复 |
+| 5 | 结束会话后报告展示 | 点击结束 → 跳转报告页 → 展示 Offer 评分、雷达图、VAR 事件 |
+| 6 | Demo 页面离线可用 | 访问 `/demo` → 展示完整报告 → 断网刷新仍可展示 |
+| 7 | 所有错误提示为中文 | 触发各类错误 → 提示均为中文（如"麦克风权限被拒绝，请检查浏览器设置"） |
+| 8 | Docker 3 分钟启动 | `docker-compose up -d` → `python main.py` → `npm run dev` |

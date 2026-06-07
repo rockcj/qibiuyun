@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
 
 /** 无需登录即可访问的路径 */
-const PUBLIC_PATHS = ["/login", "/register"];
+const PUBLIC_PATHS = ["/login", "/register", "/demo"];
 
 /** 静态资源和 API 路由不拦截 */
 const SKIP_PATTERNS = ["/api/", "/_next/", "/favicon.ico", "/health"];
