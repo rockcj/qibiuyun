@@ -82,6 +82,20 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
 
   return (
     <div className="space-y-10">
+      {/* 场景氛围描述卡片 — 非面试场景显示 */}
+      {!isInterview && (
+        <section className="rounded-2xl border border-emerald-200 bg-gradient-to-br from-emerald-50 to-teal-50 p-5">
+          <p className="text-sm font-semibold text-emerald-800">
+            {scene.scene === "restaurant"
+              ? "🍽️ You are dining at an upscale restaurant. Practice ordering food, making reservations, handling special dietary requests, and splitting the bill — all in natural English."
+              : "📊 You are in a professional business meeting. Practice delivering project updates, proposing ideas, responding to questions, and wrapping up with clear action items."}
+          </p>
+          <p className="mt-2 text-xs text-emerald-600">
+            {t("config.placeholderHint")}
+          </p>
+        </section>
+      )}
+
       {/* 子主题选择 */}
       <section>
         <h2 className="text-lg font-bold tracking-tight text-zinc-800">
@@ -240,7 +254,7 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
           <span className="text-xs text-zinc-400">{t("scene.requiresResume")}</span>
         )}
         {!isInterview && (
-          <span className="text-xs font-medium text-amber-500">{t("config.placeholderHint")}</span>
+          <span className="text-xs font-medium text-zinc-400">{t("config.placeholderHint")}</span>
         )}
       </div>
     </div>

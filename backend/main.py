@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 # Application
 # ---------------------------------------------------------------------------
 app = FastAPI(
-    title="OfferGPT API",
+    title="SpeakUp AI",
     version="1.0.0",
     description="AI Real-Scene English Speaking Coach",
     lifespan=lifespan,
@@ -141,3 +141,16 @@ async def health_check():
         "cache": await cache.ping(),
         "wsConnections": ws_manager.active_connections,
     }
+
+
+# ---------------------------------------------------------------------------
+# Entry point – 支持 python main.py 和 uvicorn main:app 两种启动方式
+# ---------------------------------------------------------------------------
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "main:app",
+        host=settings.host,
+        port=settings.port,
+        reload=settings.is_development,
+    )

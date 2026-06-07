@@ -103,8 +103,8 @@ export default function HomeContent({ scenes }: { scenes: SceneCardData[] }) {
           {/* Logo */}
           <div className="flex items-center gap-3">
             <span className="text-2xl font-black tracking-tight text-zinc-900">
-              Offer
-              <span className="text-indigo-500">GPT</span>
+              SpeakUp
+              <span className="text-indigo-500"> AI</span>
             </span>
           </div>
 

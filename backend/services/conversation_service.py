@@ -49,6 +49,28 @@ Additional interview rules:
 - If the candidate goes off-topic, gently redirect: "That's interesting, but let's focus on..."
 """
 
+# 餐厅点餐场景专用追问策略
+_RESTAURANT_FOLLOWUP_RULES = """
+Additional restaurant server rules:
+- When the user orders a main dish, ask about sides, cooking preference (e.g. steak doneness), or drink pairings.
+- When handling a reservation, confirm: number of guests, preferred time, any special seating requests (window/private room).
+- When the user makes a complaint, first apologize sincerely, then ask for specifics: "I'm very sorry about that. Could you tell me exactly what happened?"
+- When presenting the bill, confirm the payment method and ask: "Would you like to split the bill?" or "Shall I bring the receipt?"
+- If the user says "I want..." or "I'd like...", suggest today's special or a popular combination: "Excellent choice! May I also recommend our..."
+- Stay in character as a restaurant server — never break role to explain language or grammar. Use natural restaurant English (polite, concise, service-oriented).
+"""
+
+# 商务会议场景专用追问策略
+_MEETING_FOLLOWUP_RULES = """
+Additional business meeting rules:
+- During a project update, ask about risks, blockers, and resource needs: "What's the biggest risk right now?" or "Do you need any support from the team?"
+- After a self-introduction, ask about the person's role and expectations: "What are you hoping to get out of today's meeting?"
+- When someone proposes an idea, ask for supporting data or concrete next steps: "That's interesting — do you have any metrics to support that?" or "How would you implement this?"
+- If the discussion goes off-topic, politely steer back: "Let's table that for now and come back to our main agenda item."
+- Before wrapping up, confirm action items and owners: "Let me summarize — [name] will handle [task] by [deadline]. Did I miss anything?"
+- Stay in character as a business professional — use meeting-appropriate language, keep responses concise and action-oriented.
+"""
+
 
 class ConversationService:
     """流式对话服务。"""
@@ -89,11 +111,20 @@ class ConversationService:
         goals = {
             ("interview", "behavioral"): "Evaluate the candidate's past behavior and STAR-structured responses.",
             ("interview", "technical"): "Assess the candidate's technical knowledge and problem-solving approach.",
-            ("restaurant", "ordering"): "Help the customer complete their food order with any special requests.",
-            ("restaurant", "reservation"): "Handle the customer's table reservation request.",
-            ("restaurant", "complaint"): "Address the customer's complaint about their meal or service.",
-            ("meeting", "projectUpdate"): "Discuss project progress, risks, and next steps.",
-            ("meeting", "selfIntroduction"): "Guide the participant through a professional self-introduction.",
+            ("interview", "projectDeepDive"): "Deep-dive into a specific project — probe architecture decisions, trade-offs, and personal contributions.",
+            ("interview", "systemDesign"): "Evaluate the candidate's system design thinking — scalability, reliability, and component decomposition.",
+            ("interview", "resumeBased"): "Ask targeted questions based on the candidate's resume content and experience.",
+            ("restaurant", "ordering"): "Help the customer complete their food order — ask about preferences, sides, drinks, and any modifications.",
+            ("restaurant", "reservation"): "Handle the customer's table reservation request — confirm date, time, party size, and seating preferences.",
+            ("restaurant", "specialRequests"): "Accommodate the customer's dietary restrictions, allergies, or special preparation requests.",
+            ("restaurant", "complaint"): "Address the customer's complaint about their meal or service — apologize, investigate, and offer a solution.",
+            ("restaurant", "payment"): "Handle the bill — confirm the total, offer to split the check, process payment, and provide a receipt.",
+            ("meeting", "selfIntroduction"): "Guide the participant through a professional self-introduction — name, role, and meeting expectations.",
+            ("meeting", "projectUpdate"): "Discuss project progress, milestones, risks, blockers, and next steps.",
+            ("meeting", "proposal"): "Facilitate discussion of a new proposal or idea — ask for supporting data, feasibility, and implementation plan.",
+            ("meeting", "respondingQuestions"): "Pose challenging follow-up questions to test the presenter's depth of understanding.",
+            ("meeting", "clarify"): "Politely seek clarification on a point that was unclear, then guide the discussion back on track.",
+            ("meeting", "summary"): "Drive the meeting to a close — recap key decisions, confirm action items with owners and deadlines.",
         }
         goal = goals.get((scene, topic), f"Have a natural {scene} conversation about {topic}.")
 
@@ -105,9 +136,13 @@ class ConversationService:
             goal=goal,
         )
 
-        # 面试场景追加追问策略
+        # 根据场景追加专属追问策略
         if scene == "interview":
             prompt += _INTERVIEW_FOLLOWUP_RULES
+        elif scene == "restaurant":
+            prompt += _RESTAURANT_FOLLOWUP_RULES
+        elif scene == "meeting":
+            prompt += _MEETING_FOLLOWUP_RULES
 
         return prompt
 

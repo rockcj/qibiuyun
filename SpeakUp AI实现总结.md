@@ -1,4 +1,4 @@
-# OfferGPT 实现总结文档
+# SpeakUp AI 实现总结文档
 
 > 生成日期：2026-06-07 | 分支：`feat/demo-stability` | 基线提交：`a70659f`
 
@@ -10,7 +10,7 @@
 
 | 编号 | 功能 | PRD 要求 | 实现状态 | 实现说明 |
 |------|------|----------|----------|----------|
-| F001 | 场景管理与角色选择 | 三场景入口（面试/点餐/会议），可切换子主题和角色 | ✅ 已实现 | 首页三个场景卡片，`SceneConfigForm` 支持选择 topic / roleMode / difficultyLevel / duration。后端 `scene_service.py` 提供三场景静态配置 |
+| F001 | 场景管理与角色选择 | 三场景入口（面试/点餐/会议），可切换子主题和角色 | ✅ 已实现 | 首页三个场景卡片。三场景均完整实现：面试 5 个 topic + 5 种角色，点餐 5 个 topic + 3 种角色，会议 6 个 topic + 3 种角色。各场景有独立追问策略（面试 5 条 / 点餐 6 条 / 会议 6 条），`SceneConfigForm` 支持选择 topic/roleMode/difficultyLevel/duration。后端 `scene_service.py` 提供配置 |
 | F002 | 简历上传与解析 | 上传 PDF/TXT，结构化提取技能、项目、风险信号 | ✅ 已实现 | `ResumeUploader` 组件 + `POST /api/resumes`，pypdf 提取文本，LLM/正则解析 |
 | F003 | JD 输入与解析 | 输入岗位描述，提取技能、能力、难度等级 | ✅ 已实现 | `JobDescriptionEditor` 组件 + `POST /api/jobs`，LLM/正则解析 |
 | F004 | 实时语音对话 | WebSocket 音频流，ASR→LLM→TTS 全链路 | ✅ 已实现 | `VoiceSessionPanel` + `useWebSocket` + `useMicrophone`，VAD→Whisper ASR→DeepSeek LLM→EdgeTTS |
@@ -23,7 +23,7 @@
 
 | 编号 | 功能 | PRD 要求 | 实现状态 | 实现说明 |
 |------|------|----------|----------|----------|
-| F101 | 多场景评分权重 | 不同场景使用不同评分维度和权重 | ✅ 已实现 | 面试 6 维度(English/Logic/Confidence/STAR/Technical/Communication)，点餐 5 维度(Politeness/Functional Phrases)，会议 5 维度(Meeting Control) |
+| F101 | 多场景评分权重 | 不同场景使用不同评分维度和权重 | ✅ 已实现 | 面试 6 维度（English/Logic/Confidence/STAR/Technical/Communication），点餐 5 维度（Politeness/FunctionalPhrases/TaskCompletion/PronunciationFluency），会议 5 维度（Logic/Communication/FunctionalPhrases/MeetingControl）。各场景有独立 Prompt 追问策略：`_INTERVIEW_FOLLOWUP_RULES`（5条）、`_RESTAURANT_FOLLOWUP_RULES`（6条）、`_MEETING_FOLLOWUP_RULES`（6条）。18 个 topic→goal 映射全覆盖 |
 | F102 | VAR 时间轴回放 | 可点击时间轴、音频片段定位、证据绑定 | ✅ 已实现 | `TimelineViewer` 按颜色区分事件类型(红/黄/绿)，`TimelineEvent` 模型绑定 transcript snippet / audio URL / evidence |
 | F103 | 简历/JD 驱动的个性化面试 | 面试问题基于简历和 JD 生成 | ✅ 已实现 | 面试场景绑定 `resumeId` + `jobId`，Conversation Agent 在 System Prompt 中注入简历摘要和 JD 画像 |
 | F104 | 多 ASR 模型切换 | 支持不同 ASR 模型运行时切换 | ✅ 已实现 | `POST /api/asr/switch` 支持 Whisper tiny/base/small 三档切换，前端 `ASRModelSelector` |
@@ -53,6 +53,9 @@
 | SQLite 开发模式 | 无 PostgreSQL/Redis 时自动降级为 SQLite + 内存缓存 |
 | ASR 语言自动检测 | Whisper 自动检测输入语言 |
 | 音频回放 | 整场录音和单轮录音均可回放，前端 `TranscriptReplayPanel` 播放 WAV/浏览器 TTS |
+| 三场景 Demo 数据 | 3 个预置 seed 会话（`de000001` 面试 / `de000002` 点餐 / `de000003` 会议），各含完整对话、报告和 VAR 事件 |
+| Demo 场景切换器 | `/demo` 页支持 💼面试/🍽️点餐/📊会议三场景切换，API→localStorage→静态数据三级降级 |
+| 场景专属追问策略 | 餐厅 6 条 + 会议 6 条 Prompt 规则，在 `ConversationService.build_system_prompt()` 中按场景自动分发 |
 
 ---
 
@@ -248,8 +251,8 @@
 | 文档 | 状态 |
 |------|------|
 | README.md | ✅ 完整（环境要求/快速启动/降级路径/检查清单） |
-| PRD | ✅ OfferGPT产品需求文档.md v2.0 |
-| 技术架构设计 | ✅ OfferGPT技术架构设计文档.md v2.0（1835 行） |
+| PRD | ✅ SpeakUp AI产品需求文档.md v2.0 |
+| 技术架构设计 | ✅ SpeakUp AI技术架构设计文档.md v2.0（1835 行） |
 | 代码结构速查 | ✅ docs/前后端代码结构速查.md |
 | 运行操作手册 | ✅ docs/运行操作手册.md |
 | 环境变量文档 | ✅ docs/environment-variables.md |
@@ -268,8 +271,10 @@
 | 数据库表 | 8 张（users/resumes/jobs/scene_presets/interviews/timeline_events/reports/agent_logs） |
 | REST API 端点 | 18 个 |
 | WebSocket 消息类型 | 7 种上行 + 12 种下行 |
-| 支持场景 | 3 个（interview/restaurant/meeting） |
-| Git 提交数 | 63 个 |
+| 支持场景 | 3 个（interview/restaurant/meeting），均已完整实现 |
+| Git 提交数 | 45 个 |
 | 前端依赖（运行时） | 3 个（next/react/react-dom） |
 | 后端依赖（运行时） | 21 个 |
 | 测试文件 | 26 个（后端 19 + 前端 7） |
+| 场景追问规则 | 17 条（面试 5 + 点餐 6 + 会议 6） |
+| Demo 预置会话 | 3 个（面试/点餐/会议） |

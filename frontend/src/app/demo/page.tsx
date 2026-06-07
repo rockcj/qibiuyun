@@ -4,10 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import SessionReportPanel from "@/components/SessionReportPanel";
 import {
-  FALLBACK_DEMO_ANALYSIS,
-  FALLBACK_DEMO_REPORT,
-  FALLBACK_DEMO_EVENTS,
   DEMO_SESSION_ID,
+  getFallbackDemoData,
 } from "@/data/demoData";
 import type {
   SessionAnalysisResponse,
@@ -17,7 +15,22 @@ import type {
   TranscriptTurn,
 } from "@/types/api";
 
-const DEMO_CACHE_KEY = "offergpt-demo-data";
+const DEMO_CACHE_KEY_PREFIX = "offergpt-demo-data";
+
+/** 从 URL 中读取当前场景（query param "scene"），默认 interview */
+function getSceneFromUrl(): string {
+  if (typeof window === "undefined") return "interview";
+  const params = new URLSearchParams(window.location.search);
+  return params.get("scene") || "interview";
+}
+
+/** 更新 URL 的 scene 参数（不刷新页面） */
+function updateSceneInUrl(scene: string) {
+  if (typeof window === "undefined") return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("scene", scene);
+  window.history.replaceState({}, "", url.toString());
+}
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
@@ -38,12 +51,11 @@ function speakEnglish(text: string) {
 }
 
 /** 尝试从 localStorage 读取缓存 */
-function loadFromCache(): DemoData | null {
+function loadFromCache(scene: string): DemoData | null {
   try {
-    const raw = localStorage.getItem(DEMO_CACHE_KEY);
+    const raw = localStorage.getItem(`${DEMO_CACHE_KEY_PREFIX}-${scene}`);
     if (!raw) return null;
     const data = JSON.parse(raw) as DemoData;
-    // 基本校验：必须有 analysis 数据
     if (data.analysis?.sessionId && data.report?.sessionId) {
       return data;
     }
@@ -54,11 +66,11 @@ function loadFromCache(): DemoData | null {
 }
 
 /** 将数据写入 localStorage 缓存 */
-function saveToCache(data: DemoData) {
+function saveToCache(scene: string, data: DemoData) {
   try {
-    localStorage.setItem(DEMO_CACHE_KEY, JSON.stringify(data));
+    localStorage.setItem(`${DEMO_CACHE_KEY_PREFIX}-${scene}`, JSON.stringify(data));
   } catch {
-    // localStorage 不可用（无痕浏览、存储满）
+    // localStorage 不可用
   }
 }
 
@@ -68,7 +80,14 @@ interface DemoData {
   events: SessionEventsResponse;
 }
 
+const SCENE_OPTIONS = [
+  { scene: "interview", label: "求职面试", icon: "💼" },
+  { scene: "restaurant", label: "餐厅点餐", icon: "🍽️" },
+  { scene: "meeting", label: "商务会议", icon: "📊" },
+];
+
 export default function DemoPage() {
+  const [scene, setScene] = useState<string>(getSceneFromUrl);
   const [analysis, setAnalysis] = useState<SessionAnalysisResponse | null>(null);
   const [report, setReport] = useState<SessionReportResponse | null>(null);
   const [timelineEvents, setTimelineEvents] = useState<SessionEventsResponse | null>(null);
@@ -115,9 +134,11 @@ export default function DemoPage() {
     let cancelled = false;
 
     async function loadData() {
+      setReportStatus("loading");
+
       // 策略 1: 尝试从后端 API 获取最新数据
       try {
-        const res = await fetch(`${API_BASE}/api/demo`);
+        const res = await fetch(`${API_BASE}/api/demo?scene=${scene}`);
         if (res.ok) {
           const data: DemoData = await res.json();
           if (!cancelled) {
@@ -126,35 +147,36 @@ export default function DemoPage() {
             setTimelineEvents(data.events);
             setReportStatus("ready");
             setDataSource("api");
-            saveToCache(data);
-            console.log("[Demo] 从 API 加载数据成功");
+            saveToCache(scene, data);
+            console.log(`[Demo] 从 API 加载 ${scene} 数据成功`);
           }
           return;
         }
       } catch {
-        console.log("[Demo] API 不可用，尝试缓存");
+        console.log(`[Demo] API 不可用（${scene}），尝试缓存`);
       }
 
       // 策略 2: 从 localStorage 缓存加载
-      const cached = loadFromCache();
+      const cached = loadFromCache(scene);
       if (cached && !cancelled) {
         setAnalysis(cached.analysis);
         setReport(cached.report);
         setTimelineEvents(cached.events);
         setReportStatus("ready");
         setDataSource("cache");
-        console.log("[Demo] 从缓存加载数据成功");
+        console.log(`[Demo] 从缓存加载 ${scene} 数据成功`);
         return;
       }
 
       // 策略 3: 使用静态兜底数据
       if (!cancelled) {
-        setAnalysis(FALLBACK_DEMO_ANALYSIS);
-        setReport(FALLBACK_DEMO_REPORT);
-        setTimelineEvents(FALLBACK_DEMO_EVENTS);
+        const fallback = getFallbackDemoData(scene);
+        setAnalysis(fallback.analysis);
+        setReport(fallback.report);
+        setTimelineEvents(fallback.events);
         setReportStatus("ready");
         setDataSource("fallback");
-        console.log("[Demo] 从静态数据加载");
+        console.log(`[Demo] 从静态数据加载 ${scene}`);
       }
     }
 
@@ -167,7 +189,19 @@ export default function DemoPage() {
         audioRef.current?.pause();
       }
     };
-  }, []);
+  }, [scene]);
+
+  /** 切换场景 */
+  const handleSceneChange = (newScene: string) => {
+    setScene(newScene);
+    updateSceneInUrl(newScene);
+  };
+
+  /** 获取当前场景的 sessionId */
+  const currentSessionId = (() => {
+    const fallback = getFallbackDemoData(scene);
+    return fallback.analysis?.sessionId || DEMO_SESSION_ID;
+  })();
 
   // ---- 数据来源横幅文案 ----
   const sourceLabel: Record<DataSource, string> = {
@@ -218,26 +252,48 @@ export default function DemoPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-blue-50 via-indigo-50 to-white">
-      {/* 顶部数据来源横幅 */}
+      {/* 顶部数据来源横幅 + 场景选择器 */}
       <div className="sticky top-0 z-40 border-b border-zinc-200/60 bg-white/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
-          <div
-            className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${sourceColorClass[dataSource]}`}
-          >
-            {sourceLabel[dataSource]}
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center justify-between gap-3 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <div
+              className={`rounded-lg border px-3 py-1.5 text-xs font-medium ${sourceColorClass[dataSource]}`}
+            >
+              {sourceLabel[dataSource]}
+            </div>
           </div>
-          <Link
-            href="/"
-            className="text-xs font-medium text-indigo-500 transition hover:text-indigo-600"
-          >
-            ← 返回首页
-          </Link>
+          <div className="flex items-center gap-2">
+            {/* 场景切换按钮组 */}
+            <div className="flex rounded-lg border border-zinc-200 bg-zinc-50 p-0.5">
+              {SCENE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.scene}
+                  type="button"
+                  onClick={() => handleSceneChange(opt.scene)}
+                  className={`rounded-md px-3 py-1.5 text-xs font-semibold transition-all duration-200 ${
+                    scene === opt.scene
+                      ? "bg-white text-zinc-800 shadow-sm"
+                      : "text-zinc-400 hover:text-zinc-600"
+                  }`}
+                >
+                  <span className="mr-1">{opt.icon}</span>
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            <Link
+              href="/"
+              className="text-xs font-medium text-indigo-500 transition hover:text-indigo-600"
+            >
+              ← 返回首页
+            </Link>
+          </div>
         </div>
       </div>
 
       {/* 报告主体 — 复用 SessionReportPanel */}
       <SessionReportPanel
-        sessionId={DEMO_SESSION_ID}
+        sessionId={currentSessionId}
         analysis={analysis}
         report={report}
         timelineEvents={timelineEvents}

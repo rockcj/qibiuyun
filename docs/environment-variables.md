@@ -1,4 +1,4 @@
-# OfferGPT 环境变量配置说明
+# SpeakUp AI 环境变量配置说明
 
 ## 配置原则
 

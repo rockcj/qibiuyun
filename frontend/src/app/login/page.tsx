@@ -18,7 +18,7 @@ function LoginContent() {
         <div className="mx-auto flex h-16 max-w-6xl items-center px-6">
           <Link href="/" className="flex items-center gap-3">
             <span className="text-2xl font-black tracking-tight text-zinc-900 dark:text-white">
-              Offer<span className="text-indigo-500">GPT</span>
+              SpeakUp<span className="text-indigo-500"> AI</span>
             </span>
           </Link>
         </div>

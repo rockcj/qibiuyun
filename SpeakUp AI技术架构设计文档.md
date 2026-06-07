@@ -1,14 +1,14 @@
-# OfferGPT 技术架构设计文档
+# SpeakUp AI 技术架构设计文档
 
 文档版本：v2.0  
 适用场景：72 小时黑客松开发、比赛 Demo 稳定运行、技术评审答辩  
-产品名称：OfferGPT  
+产品名称：SpeakUp AI  
 产品定位：AI Real-Scene English Speaking Coach，AI 真实场景英语口语陪练  
 核心目标：通过面试、餐厅点餐和商务会议三类真实场景，结合实时英语语音对话、场景角色、轻量纠错、VAR 回放和场景报告，帮助用户提升可迁移的英语口语表达能力。
 
 ## 0. 架构设计摘要
 
-OfferGPT 不是普通英语陪练产品，而是一个围绕“真实场景对话”构建的实时 AI Agent 系统。系统在 MVP 阶段支持求职面试、餐厅点餐和商务会议三类场景：面试场景保留简历、目标岗位 JD、面试官人格、连续追问、STAR 分析和 Offer Report；点餐与会议场景通过场景角色、子主题、功能句评分和专属报告覆盖日常与商务表达。用户获得的不只是聊天记录，而是一份可解释、可回放、可训练、可持续进化的口语成长画像。
+SpeakUp AI 不是普通英语陪练产品，而是一个围绕”真实场景对话”构建的实时 AI Agent 系统。系统在 MVP 阶段支持求职面试、餐厅点餐和商务会议三类场景：面试场景保留简历、目标岗位 JD、面试官人格、连续追问、STAR 分析和 Offer Report；点餐与会议场景通过场景角色、子主题、功能句评分和专属报告覆盖日常与商务表达。用户获得的不只是聊天记录，而是一份可解释、可回放、可训练、可持续进化的口语成长画像。
 
 从工程角度看，系统被拆分为七层：Frontend、Gateway、Realtime Service、Agent Layer、LLM Layer、Storage Layer、Monitoring Layer。Frontend 负责场景选择、子主题选择、简历上传、JD 输入、角色选择、实时语音采集、音频播放、VAR 时间轴展示和报告页面。Gateway 负责鉴权、限流、REST API、WebSocket 会话接入和路由。Realtime Service 负责 VAD、ASR、流式文本增量、TTS、音频缓冲、打断控制和端到端延迟控制。Agent Layer 是产品差异化核心，包含 Scene Router Agent、Conversation Agent、Persona Agent、Grammar Agent、Pronunciation Agent、STAR Agent、Replay Agent、Report Agent、Growth Coach Agent 和 Interview Twin Agent。LLM Layer 负责多模型路由、Prompt 模板渲染、函数调用、结构化输出、缓存和降级。Storage Layer 存储用户、简历、岗位、场景会话、时间轴事件、报告、Agent 日志和音频对象。Monitoring Layer 负责日志、指标、链路追踪、模型质量评估和 Demo 值守。
 

@@ -18,10 +18,10 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "OfferGPT - AI Real-Scene English Speaking Coach",
+  title: "SpeakUp AI · 英语口语实战教练",
   description:
-    "在真实场景中与 AI 角色对话：模拟面试官、餐厅服务员、会议同事……实时纠正发音/语法，生成可量化的口语成长报告。",
-  keywords: ["AI英语陪练", "口语训练", "面试模拟", "OfferGPT", "实时语音"],
+    "SpeakUp AI — 多场景 AI 英语口语陪练。面试、点餐、会议，实时语音对话 + 多维纠错 + 量化评分。",
+  keywords: ["AI英语陪练", "口语训练", "面试模拟", "SpeakUp AI", "实时语音"],
 };
 
 export default function RootLayout({
