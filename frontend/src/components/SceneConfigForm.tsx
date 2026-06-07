@@ -81,10 +81,10 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
   };
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-10">
       {/* 子主题选择 */}
       <section>
-        <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">
+        <h2 className="text-lg font-bold tracking-tight text-zinc-800">
           {t("scene.topics")}
         </h2>
         <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3">
@@ -93,10 +93,10 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
               key={topic.topic}
               type="button"
               onClick={() => setConfig((c) => ({ ...c, topic: topic.topic }))}
-              className={`rounded-xl border p-4 text-sm font-medium transition-all ${
+              className={`rounded-2xl border p-4 text-sm font-semibold transition-all duration-300 ${
                 config.topic === topic.topic
-                  ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:border-indigo-400 dark:bg-indigo-900/30 dark:text-indigo-300"
-                  : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
+                  ? "border-indigo-400 bg-gradient-to-br from-indigo-50 to-purple-50 text-indigo-700 shadow-md shadow-indigo-100 scale-[1.02]"
+                  : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50 hover:shadow-sm"
               }`}
             >
               {topic.displayName}
@@ -107,7 +107,7 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
 
       {/* AI 角色选择 */}
       <section>
-        <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">
+        <h2 className="text-lg font-bold tracking-tight text-zinc-800">
           {t("scene.roles")}
         </h2>
         <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -122,10 +122,10 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
                   personaMode: role.roleMode,
                 }))
               }
-              className={`rounded-xl border p-4 text-left text-sm font-medium transition-all ${
+              className={`rounded-2xl border p-4 text-left text-sm font-semibold transition-all duration-300 ${
                 config.roleMode === role.roleMode
-                  ? "border-indigo-500 bg-indigo-50 text-indigo-700 dark:border-indigo-400 dark:bg-indigo-900/30 dark:text-indigo-300"
-                  : "border-zinc-200 bg-white text-zinc-700 hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-900 dark:text-zinc-300"
+                  ? "border-indigo-400 bg-gradient-to-br from-indigo-50 to-purple-50 text-indigo-700 shadow-md shadow-indigo-100 scale-[1.02]"
+                  : "border-zinc-200 bg-white text-zinc-600 hover:border-zinc-300 hover:bg-zinc-50 hover:shadow-sm"
               }`}
             >
               {role.displayName}
@@ -135,9 +135,9 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
       </section>
 
       {/* 难度与时长 */}
-      <section className="grid grid-cols-1 gap-6 sm:grid-cols-2">
+      <section className="grid grid-cols-1 gap-8 sm:grid-cols-2">
         <div>
-          <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">
+          <h2 className="text-lg font-bold tracking-tight text-zinc-800">
             {t("config.difficulty")}
           </h2>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -146,10 +146,10 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
                 key={opt.value}
                 type="button"
                 onClick={() => setConfig((c) => ({ ...c, difficultyLevel: opt.value }))}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition-all ${
+                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-300 ${
                   config.difficultyLevel === opt.value
-                    ? "bg-indigo-500 text-white"
-                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"
+                    ? "bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-lg shadow-indigo-200 scale-105"
+                    : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
                 }`}
               >
                 {t(opt.labelKey)}
@@ -159,7 +159,7 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
         </div>
 
         <div>
-          <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">
+          <h2 className="text-lg font-bold tracking-tight text-zinc-800">
             {t("config.duration")}
           </h2>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -168,10 +168,10 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
                 key={min}
                 type="button"
                 onClick={() => setConfig((c) => ({ ...c, durationMinutes: min }))}
-                className={`rounded-full px-4 py-2 text-sm font-medium transition-all ${
+                className={`rounded-full px-5 py-2.5 text-sm font-semibold transition-all duration-300 ${
                   config.durationMinutes === min
-                    ? "bg-indigo-500 text-white"
-                    : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-300"
+                    ? "bg-gradient-to-r from-indigo-500 to-purple-500 text-white shadow-lg shadow-indigo-200 scale-105"
+                    : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 hover:text-zinc-700"
                 }`}
               >
                 {min} {t("config.minutes")}
@@ -190,9 +190,9 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
             onChange={(e) =>
               setConfig((c) => ({ ...c, realtimeLightCorrection: e.target.checked }))
             }
-            className="h-5 w-5 rounded border-zinc-300 text-indigo-500 focus:ring-indigo-500"
+            className="h-5 w-5 rounded border-zinc-300 text-indigo-500 focus:ring-2 focus:ring-indigo-300"
           />
-          <span className="text-sm text-zinc-700 dark:text-zinc-300">
+          <span className="text-sm font-medium text-zinc-600">
             {t("config.lightCorrection")}
           </span>
         </label>
@@ -200,14 +200,14 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
 
       {/* 评分维度展示 */}
       <section>
-        <h2 className="text-lg font-semibold text-zinc-800 dark:text-zinc-200">
+        <h2 className="text-lg font-bold tracking-tight text-zinc-800">
           {t("scene.rubric")}
         </h2>
         <div className="mt-3 flex flex-wrap gap-2">
           {scene.rubric.map((r) => (
             <span
               key={r}
-              className="rounded-full bg-indigo-50 px-3 py-1 text-xs font-medium text-indigo-600 dark:bg-indigo-900/30 dark:text-indigo-300"
+              className="rounded-full bg-gradient-to-r from-indigo-50 to-purple-50 px-3.5 py-1.5 text-xs font-semibold text-indigo-600 border border-indigo-100"
             >
               {r}
             </span>
@@ -217,18 +217,18 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
 
       {/* 错误提示 */}
       {error && (
-        <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+        <div className="rounded-xl border border-red-200 bg-red-50 px-5 py-3 text-sm font-medium text-red-600">
           {error}
         </div>
       )}
 
       {/* 提交按钮 */}
-      <div className="flex items-center gap-4">
+      <div className="flex items-center gap-4 pt-2">
         <button
           type="button"
           onClick={handleSubmit}
           disabled={loading}
-          className="rounded-xl bg-indigo-500 px-8 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-200 transition-all hover:bg-indigo-600 disabled:opacity-50 dark:shadow-indigo-900/30"
+          className="rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-200 transition-all duration-300 hover:shadow-xl hover:shadow-indigo-300 hover:scale-[1.03] disabled:opacity-50 disabled:hover:scale-100"
         >
           {loading
             ? t("config.creating")
@@ -240,7 +240,7 @@ export default function SceneConfigForm({ scene }: SceneConfigFormProps) {
           <span className="text-xs text-zinc-400">{t("scene.requiresResume")}</span>
         )}
         {!isInterview && (
-          <span className="text-xs text-amber-500">{t("config.placeholderHint")}</span>
+          <span className="text-xs font-medium text-amber-500">{t("config.placeholderHint")}</span>
         )}
       </div>
     </div>

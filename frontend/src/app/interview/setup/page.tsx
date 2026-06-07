@@ -15,6 +15,18 @@ const ASR_MODELS = [
   { key: "max-pro", label: "Max Pro", icon: "🔬", desc: "精准识别", accuracy: "~91%", tag: "高配置" },
 ];
 
+/** 浮动光斑 */
+function FloatingOrbs() {
+  return (
+    <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
+      <div className="absolute h-64 w-64 rounded-full opacity-12"
+        style={{ background: "radial-gradient(circle, rgba(99,102,241,0.3) 0%, transparent 70%)", top: "8%", right: "-5%", animation: "floatSlow 8s ease-in-out infinite" }} />
+      <div className="absolute h-48 w-48 rounded-full opacity-10"
+        style={{ background: "radial-gradient(circle, rgba(245,158,11,0.25) 0%, transparent 70%)", bottom: "15%", left: "-4%", animation: "floatMedium 10s ease-in-out infinite 1s" }} />
+    </div>
+  );
+}
+
 function InterviewSetupContent() {
   const { t } = useLocale();
   const router = useRouter();
@@ -108,13 +120,17 @@ function InterviewSetupContent() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-50 dark:bg-zinc-950">
-      <header className="border-b border-zinc-200 bg-white/80 backdrop-blur-sm dark:border-zinc-800 dark:bg-zinc-950/80">
-        <div className="mx-auto flex h-16 max-w-4xl items-center px-6">
-          <Link
-            href="/scenes/interview"
-            className="flex items-center gap-2 text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-white transition-colors"
-          >
+    <div className="relative flex min-h-screen flex-col overflow-hidden bg-gradient-to-b from-blue-50 via-indigo-50 to-white">
+      <FloatingOrbs />
+
+      {/* Header */}
+      <header className="relative border-b border-zinc-200/60 bg-white/70 backdrop-blur-xl">
+        <div className="absolute bottom-0 left-0 right-0 h-0.5"
+          style={{ background: "linear-gradient(90deg, #6366f1 0%, #a855f7 25%, #f59e0b 50%, #10b981 75%, #6366f1 100%)", backgroundSize: "200% 100%", animation: "gradientFlow 6s ease infinite" }} />
+
+        <div className="mx-auto flex h-16 max-w-6xl items-center px-6">
+          <Link href="/scenes/interview"
+            className="flex items-center gap-2 text-sm font-medium text-zinc-500 transition-colors hover:text-indigo-500">
             <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
@@ -123,43 +139,38 @@ function InterviewSetupContent() {
         </div>
       </header>
 
-      <main className="mx-auto w-full max-w-4xl flex-1 px-6 py-12">
-        <h1 className="text-3xl font-extrabold text-zinc-900 dark:text-white">
-          {t("setup.title")}
-        </h1>
+      {/* 主体 */}
+      <main className="relative mx-auto w-full max-w-6xl flex-1 px-6 py-12">
+        <h1 className="text-3xl font-extrabold tracking-tight text-zinc-900">{t("setup.title")}</h1>
         <p className="mt-2 text-zinc-500">{t("setup.subtitle")}</p>
 
         <div className="mt-10 space-y-8">
-          <ResumeUploader
-            onUploaded={(id) => setResumeId(id)}
-          />
-          <JobDescriptionEditor
-            onCreated={(id) => setJobId(id)}
-          />
+          {/* 简历 + JD 左右两列并排 */}
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+            <ResumeUploader onUploaded={(id) => setResumeId(id)} />
+            <JobDescriptionEditor onCreated={(id) => setJobId(id)} />
+          </div>
 
-          {/* ASR 模型选择 */}
-          <div className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
-            <div className="mb-3 flex items-center gap-2">
+          {/* ASR 模型选择 — 全宽 */}
+          <div className="rounded-2xl border border-zinc-200 bg-white p-6">
+            <div className="mb-4 flex items-center gap-2">
               <span className="text-lg">🎤</span>
-              <span className="font-semibold text-zinc-800 dark:text-zinc-200">语音识别模型</span>
-              <span className="ml-auto text-[11px] text-zinc-400">影响识别准确率和响应速度</span>
+              <span className="font-bold text-zinc-800">语音识别模型</span>
+              <span className="ml-auto text-xs text-zinc-400">影响识别准确率和响应速度</span>
             </div>
             <div className="grid grid-cols-3 gap-3">
               {ASR_MODELS.map((m) => {
                 const isSelected = asrModel === m.key;
                 const isThisSwitching = isSelected && modelSwitching;
                 return (
-                  <button
-                    key={m.key}
-                    type="button"
+                  <button key={m.key} type="button"
                     onClick={() => handleModelSwitch(m.key)}
                     disabled={modelSwitching}
-                    className={`relative rounded-xl p-3.5 text-center transition-all duration-300 ${
+                    className={`relative rounded-xl p-4 text-center transition-all duration-300 ${
                       isSelected
-                        ? "border-2 border-indigo-500 bg-indigo-50 shadow-sm dark:border-indigo-400 dark:bg-indigo-950/40"
-                        : "border-2 border-zinc-100 bg-zinc-50 hover:border-zinc-300 dark:border-zinc-800 dark:bg-zinc-800/50 dark:hover:border-zinc-600"
-                    } ${modelSwitching && !isSelected ? "cursor-not-allowed opacity-50" : ""}`}
-                  >
+                        ? "border-2 border-indigo-400 bg-gradient-to-br from-indigo-50 to-purple-50 shadow-md shadow-indigo-100"
+                        : "border-2 border-zinc-100 bg-zinc-50 hover:border-zinc-300 hover:bg-white hover:shadow-sm"
+                    } ${modelSwitching && !isSelected ? "cursor-not-allowed opacity-40" : ""}`}>
                     {isSelected && (
                       <div className="absolute right-2 top-2 flex h-5 w-5 items-center justify-center rounded-full bg-indigo-500">
                         {isThisSwitching ? (
@@ -170,16 +181,16 @@ function InterviewSetupContent() {
                       </div>
                     )}
                     <div className="text-2xl">{m.icon}</div>
-                    <div className="mt-1.5 text-sm font-bold text-zinc-800 dark:text-zinc-200">{m.label}</div>
-                    <div className="text-[11px] text-zinc-500 dark:text-zinc-400">{m.desc}</div>
-                    <div className="mt-0.5 text-[10px] text-zinc-400">{m.accuracy}</div>
-                    <div className="mt-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] text-zinc-500 dark:bg-zinc-800 dark:text-zinc-400">{m.tag}</div>
+                    <div className="mt-1.5 text-sm font-bold text-zinc-800">{m.label}</div>
+                    <div className="text-xs text-zinc-500">{m.desc}</div>
+                    <div className="text-[11px] text-zinc-400">{m.accuracy}</div>
+                    <div className="mt-1 rounded-full bg-zinc-100 px-2 py-0.5 text-[10px] font-medium text-zinc-500">{m.tag}</div>
                   </button>
                 );
               })}
             </div>
             {modelSwitching && (
-              <p className="mt-3 flex items-center gap-2 text-center text-xs text-indigo-600 dark:text-indigo-400">
+              <p className="mt-3 flex items-center gap-2 text-xs font-medium text-indigo-500">
                 <span className="inline-block h-3 w-3 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
                 正在加载 {ASR_MODELS.find((m) => m.key === asrModel)?.label} 模型，请稍候...
               </p>
@@ -188,30 +199,24 @@ function InterviewSetupContent() {
         </div>
 
         {error && (
-          <div className="mt-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
-            {error}
-          </div>
+          <div className="mt-6 rounded-xl border border-red-200 bg-red-50 px-5 py-3 text-sm font-medium text-red-600">{error}</div>
         )}
 
         <div className="mt-10 flex items-center gap-4">
-          <button
-            type="button"
-            onClick={handleStartInterview}
+          <button type="button" onClick={handleStartInterview}
             disabled={!canStart || loading}
-            className="rounded-xl bg-indigo-500 px-8 py-3 text-sm font-semibold text-white shadow-lg shadow-indigo-200 transition-all hover:bg-indigo-600 disabled:cursor-not-allowed disabled:opacity-50 dark:shadow-indigo-900/30"
-          >
+            className="rounded-xl bg-gradient-to-r from-indigo-500 to-purple-500 px-8 py-3.5 text-sm font-bold text-white shadow-lg shadow-indigo-200 transition-all duration-300 hover:shadow-xl hover:shadow-indigo-300 hover:scale-[1.03] disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:scale-100">
             {loading
               ? t("config.creating")
               : modelSwitching
                 ? "模型加载中..."
-                : `${t("setup.startInterview")} (${ASR_MODELS.find((m) => m.key === asrModel)?.label || asrModel})`
-            }
+                : `${t("setup.startInterview")} (${ASR_MODELS.find((m) => m.key === asrModel)?.label || asrModel})`}
           </button>
           {!canStart && !modelSwitching && (
             <span className="text-xs text-zinc-400">{t("setup.needBoth")}</span>
           )}
           {!modelReady && (
-            <span className="text-xs text-indigo-500 animate-pulse">模型切换中，请稍候...</span>
+            <span className="text-xs font-medium text-indigo-500 animate-pulse">模型切换中，请稍候...</span>
           )}
         </div>
       </main>
