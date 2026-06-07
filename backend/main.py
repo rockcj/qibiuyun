@@ -54,7 +54,7 @@ async def lifespan(app: FastAPI):
 # Application
 # ---------------------------------------------------------------------------
 app = FastAPI(
-    title="OfferGPT API",
+    title="SpeakUp AI",
     version="1.0.0",
     description="AI Real-Scene English Speaking Coach",
     lifespan=lifespan,

@@ -1,6 +1,8 @@
-# OfferGPT
+# SpeakUp AI
 
-AI Real-Scene English Speaking Coach — 在真实场景中与 AI 角色对话，实时纠正发音/语法，生成可量化的口语成长报告。
+> 七牛云 × XEngineer 暑期实训营 · AI 英语口语陪练
+
+AI 实时场景英语口语实战教练 — 在真实场景中与 AI 角色对话，实时纠正发音/语法，生成可量化的口语成长报告。
 
 ## 环境要求
 

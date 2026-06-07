@@ -1,8 +1,8 @@
-# OfferGPT 配置文档
+# SpeakUp AI 配置文档
 
 ## 文档目标
 
-本文档根据 `OfferGPT技术架构设计文档.md` 和 `docs/agent-team` 开发文档整理项目的完整配置点。当前三大场景（面试/点餐/会议）均已实现，配置覆盖首页进入、简历/JD、创建会话、实时对话、轻纠正、场景报告和 VAR 时间轴的完整闭环。
+本文档根据 `SpeakUp AI技术架构设计文档.md` 和 `docs/agent-team` 开发文档整理项目的完整配置点。当前三大场景（面试/点餐/会议）均已实现，配置覆盖首页进入、简历/JD、创建会话、实时对话、轻纠正、场景报告和 VAR 时间轴的完整闭环。
 
 ## 配置优先级
 
@@ -37,7 +37,7 @@
 | 变量名                                 | 是否必填 | 示例值                     | 说明                                        |
 | ----------------------------------- | ---- | ----------------------- | ----------------------------------------- |
 | `APP_ENV`                           | 是    | `development`           | 运行环境，可选 `development`、`demo`、`production` |
-| `APP_NAME`                          | 是    | `OfferGPT`              | 应用名称                                      |
+| `APP_NAME`                          | 是    | `SpeakUp AI`              | 应用名称                                      |
 | `APP_BASE_URL`                      | 是    | `http://localhost:3000` | 前端访问地址                                    |
 | `API_BASE_URL`                      | 是    | `http://localhost:8000` | 后端 REST API 地址                            |
 | `WS_BASE_URL`                       | 是    | `ws://localhost:8000`   | 后端 WebSocket 地址                           |

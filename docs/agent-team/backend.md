@@ -2,7 +2,7 @@
 
 ## 文档目标
 
-本文档面向后端 Agent，负责 OfferGPT 的 API、实时语音链路、Agent 编排、数据存储、报告生成和稳定性兜底。后端使用 FastAPI + WebSocket + PostgreSQL + Redis 实现，三大场景（面试/点餐/会议）均已完整实现。
+本文档面向后端 Agent，负责 SpeakUp AI 的 API、实时语音链路、Agent 编排、数据存储、报告生成和稳定性兜底。后端使用 FastAPI + WebSocket + PostgreSQL + Redis 实现，三大场景（面试/点餐/会议）均已完整实现。
 
 ## 开发优先级
 

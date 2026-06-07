@@ -1,4 +1,4 @@
-# OfferGPT 实现总结文档
+# SpeakUp AI 实现总结文档
 
 > 生成日期：2026-06-07 | 分支：`feat/step6-demo-stability` | 基线提交：`a70659f`
 
@@ -251,8 +251,8 @@
 | 文档 | 状态 |
 |------|------|
 | README.md | ✅ 完整（环境要求/快速启动/降级路径/检查清单） |
-| PRD | ✅ OfferGPT产品需求文档.md v2.0 |
-| 技术架构设计 | ✅ OfferGPT技术架构设计文档.md v2.0（1835 行） |
+| PRD | ✅ SpeakUp AI产品需求文档.md v2.0 |
+| 技术架构设计 | ✅ SpeakUp AI技术架构设计文档.md v2.0（1835 行） |
 | 代码结构速查 | ✅ docs/前后端代码结构速查.md |
 | 运行操作手册 | ✅ docs/运行操作手册.md |
 | 环境变量文档 | ✅ docs/environment-variables.md |

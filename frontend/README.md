@@ -1,10 +1,10 @@
-# OfferGPT Frontend
+# SpeakUp AI Frontend
 
-基于 Next.js 16 的 OfferGPT AI 实时场景英语口语陪练平台前端。
+基于 Next.js 16 的 SpeakUp AI 实时场景英语口语陪练平台前端。
 
 ## 项目简介
 
-OfferGPT 是一个 AI 驱动的实时英语口语陪练平台，支持三大场景：求职面试（Interview）、餐厅点餐（Restaurant）、商务会议（Meeting）。前端提供实时语音对话、ASR 字幕、AI 文本流、TTS 音频播放、实时轻纠正、VAR 时间轴回放和多维度场景报告展示。
+SpeakUp AI 是一个 AI 驱动的实时英语口语陪练平台，支持三大场景：求职面试（Interview）、餐厅点餐（Restaurant）、商务会议（Meeting）。前端提供实时语音对话、ASR 字幕、AI 文本流、TTS 音频播放、实时轻纠正、VAR 时间轴回放和多维度场景报告展示。
 
 ## 技术栈
 

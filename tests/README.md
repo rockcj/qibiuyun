@@ -1,4 +1,4 @@
-# OfferGPT 测试目录说明
+# SpeakUp AI 测试目录说明
 
 ## 目录结构
 

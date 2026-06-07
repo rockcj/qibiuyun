@@ -1,6 +1,6 @@
 version: "3.9"
 
-# OfferGPT 基础设施服务
+# SpeakUp AI 基础设施服务
 # 启动: docker-compose up -d
 # 停止: docker-compose down
 # 清理数据: docker-compose down -v
