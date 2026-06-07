@@ -42,7 +42,7 @@ export default function Sidebar() {
       {/* Logo */}
       <div className="px-5 pt-5 pb-4">
         <Link href="/" className="text-xl font-black tracking-tight text-zinc-900">
-          Offer<span className="text-indigo-500">GPT</span>
+          SpeakUp<span className="text-indigo-500"> AI</span>
         </Link>
       </div>
 
