@@ -1,6 +1,6 @@
 # OfferGPT 实现总结文档
 
-> 生成日期：2026-06-07 | 分支：`feat/step6-demo-stability` | 基线提交：`a70659f`
+> 生成日期：2026-06-07 | 分支：`feat/demo-stability` | 基线提交：`a70659f`
 
 ---
 
