@@ -39,21 +39,34 @@ npm run dev
 - 后端 API 文档：http://localhost:8000/docs
 - **离线 Demo 报告页**：http://localhost:3000/demo
 
+> ⚠️ **重要**：`.env.docker` 中的 `DEEPSEEK_API_KEY` 为占位符 `sk-your-deepseek-api-key-here`。填入真实 DeepSeek API Key 后才能进行实时 AI 对话。即使没有 API Key，Demo 页面 `/demo` 仍可完整展示三个场景的报告、评分和 VAR 时间轴（离线兜底数据）。
+
+### 两种体验模式
+
+| 模式 | 需要 DeepSeek API Key | 可用功能 |
+|------|----------------------|----------|
+| **Demo 离线模式** | ❌ 不需要 | `/demo` 页面三场景报告（评分/雷达图/VAR/对话回放），无需后端 |
+| **完整实时对话** | ✅ 需要 | 所有功能：实时语音对话、ASR 语音识别、LLM 流式回复、TTS 语音合成、课后报告生成 |
+
+> 获取 DeepSeek API Key：[platform.deepseek.com](https://platform.deepseek.com) → API Keys → 创建新 Key → 填入 `.env.local` 的 `DEEPSEEK_API_KEY`
+
 ### 方式二：手动启动（开发模式，使用 SQLite）
 
 ```bash
-# 后端
+# 后端（无需 PostgreSQL/Redis，自动使用 SQLite + 内存缓存）
 cd backend
 pip install -r requirements.txt
+# 跳过登录（可选，创建 backend/.env 设置 DEMO 模式）
+echo "DEMO_MODE_ENABLED=true" > backend/.env
 python main.py
 
-# 前端
+# 前端（另开终端）
 cd frontend
 npm install
 npm run dev
 ```
 
-> 开发模式无需 PostgreSQL/Redis，后端自动使用 SQLite + 内存缓存。设置 `DEMO_MODE_ENABLED=true` 可跳过登录。
+> **说明**：开发模式默认使用 SQLite 数据库（`backend/offergpt.db`，首次运行自动创建并写入种子数据）和内存缓存，无需安装 PostgreSQL/Redis。不设置 `DEMO_MODE_ENABLED` 则需先注册/登录。
 
 ### 数据库
 
@@ -64,14 +77,17 @@ npm run dev
 
 ## Demo 演示模式
 
-项目预置了完整的演示数据，可用于无后端离线展示：
+项目预置了三个场景的完整演示数据，可用于无后端离线展示：
 
-- **访问 Demo 页面**：打开 `http://localhost:3000/demo`，可查看完整面试报告（雷达图、VAR 时间轴、对话回放）
+- **访问 Demo 页面**：打开 `http://localhost:3000/demo`，默认展示面试场景报告。可通过顶部切换器切换 💼求职面试 / 🍽️餐厅点餐 / 📊商务会议 三个场景
 - **三层降级策略**：
-  1. 在线模式 → 从后端 `/api/demo` 获取最新数据
+  1. 在线模式 → 从后端 `/api/demo?scene=interview|restaurant|meeting` 获取最新数据
   2. 离线模式 → 从浏览器 localStorage 缓存加载
   3. 完全离线 → 使用前端内置静态兜底数据
-- **Demo 会话**：`demo_interview_001`，Backend Engineer 面试场景，含 5 轮英文对话、3 项亮点、3 条改进建议
+- **Demo 会话**：
+  - `demo_interview_001`（de000001）：Backend Engineer 面试，Offer 评分 78
+  - `demo_restaurant_001`（de000002）：The Garden Bistro 点餐，点餐评分 82
+  - `demo_meeting_001`（de000003）：Mobile App Redesign 项目汇报，会议评分 79
 - **Demo 用户**：`demo@offergpt.local`（无需密码，适用于 DEMO_MODE）
 
 ## 降级路径
@@ -112,11 +128,13 @@ qibiuyun/
 
 ## 场景支持
 
-| 场景 | API Scene ID | 角色示例 |
-|------|-------------|---------|
-| 求职面试 | `interview` | Founder, Product Thinker, Engineering Leader, Stress |
-| 餐厅点餐 | `restaurant` | 友好/忙碌/不耐烦服务员 |
-| 商务会议 | `meeting` | 主持人、同事、上级 |
+| 场景 | API Scene ID | 子主题数 | 角色数 | 评分维度 | 追问规则 | 状态 |
+|------|-------------|---------|-------|---------|---------|------|
+| 求职面试 | `interview` | 5 | 5 | 6（English/Logic/Confidence/STAR/Technical/Communication） | 5 条 | ✅ 完整 |
+| 餐厅点餐 | `restaurant` | 5 | 3 | 5（English/Politeness/FunctionalPhrases/TaskCompletion/PronunciationFluency） | 6 条 | ✅ 完整 |
+| 商务会议 | `meeting` | 6 | 3 | 5（English/Logic/Communication/FunctionalPhrases/MeetingControl） | 6 条 | ✅ 完整 |
+
+> 三场景均有独立 Prompt 追问策略、完整 Topic→Goal 映射和预置 Demo 数据。每场景 3 种 AI 角色可选，支持 5 种难度等级。
 
 详见 [前后端代码结构速查](docs/前后端代码结构速查.md)（Bug 定位、数据流、模块职责）。
 
@@ -244,11 +262,12 @@ python -m pytest tests/backend/test_grammar_agent.py tests/backend/test_pronunci
 
 | # | 检查项 | 验证方式 |
 |---|--------|---------|
-| 1 | 首页三个场景入口均可点击 | 点击 interview/restaurant/meeting 卡片，进入场景配置页 |
+| 1 | 首页三个场景入口均可点击 | 点击 interview/restaurant/meeting 卡片，进入场景配置页，三个场景均可创建会话并完成对话 |
 | 2 | 面试场景完成简历+JD上传 | 上传 PDF/TXT 简历 + 粘贴 JD，点击"开始面试"进入对话 |
-| 3 | 无麦克风切换到文本模式 | 拒绝麦克风权限 → 自动显示文本输入框 → 输入英文 → AI 回复 |
-| 4 | WebSocket 断线重连 | 对话中关闭网络 → 显示"连接断开，正在重连…" → 5 秒内恢复 |
-| 5 | 结束会话后报告展示 | 点击结束 → 跳转报告页 → 展示 Offer 评分、雷达图、VAR 事件 |
-| 6 | Demo 页面离线可用 | 访问 `/demo` → 展示完整报告 → 断网刷新仍可展示 |
-| 7 | 所有错误提示为中文 | 触发各类错误 → 提示均为中文（如"麦克风权限被拒绝，请检查浏览器设置"） |
-| 8 | Docker 3 分钟启动 | `docker-compose up -d` → `python main.py` → `npm run dev` |
+| 3 | 餐厅/会议场景直接创建会话 | 无需简历，选择主题和角色后直接开始对话练习 |
+| 4 | 无麦克风切换到文本模式 | 拒绝麦克风权限 → 自动显示文本输入框 → 输入英文 → AI 回复 |
+| 5 | WebSocket 断线重连 | 对话中关闭网络 → 显示"连接断开，正在重连…" → 5 秒内恢复 |
+| 6 | 结束会话后报告展示 | 点击结束 → 跳转报告页 → 展示对应场景评分（Offer/点餐/会议）、雷达图、VAR 事件 |
+| 7 | Demo 页面三场景切换 | 访问 `/demo` → 顶部切换💼面试/🍽️点餐/📊会议 → 断网刷新仍可展示 |
+| 8 | 所有错误提示为中文 | 触发各类错误 → 提示均为中文（如"麦克风权限被拒绝，请检查浏览器设置"） |
+| 9 | Docker 3 分钟启动 | `docker-compose up -d` → `python main.py` → `npm run dev` |
