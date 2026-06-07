@@ -6,10 +6,10 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import Response
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import delete as sa_delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -17,7 +17,7 @@ from auth.dependencies import get_current_user
 from config import settings
 from database import get_db
 from exceptions import ApiError
-from models.base import Interview, Job, Report, Resume, TimelineEvent, User
+from models.base import AgentLog, Interview, Job, Report, Resume, TimelineEvent, User
 from services.report_service import report_service
 from services.scene_service import get_scene
 from services.session_persist_service import (
@@ -57,6 +57,25 @@ class SessionResponse(BaseModel):
     topic: Optional[str] = None
     persona: Optional[dict] = None
     status: str = "created"
+
+
+class UserSessionSummary(BaseModel):
+    """用户历史会话摘要（首页面试记录列表）。"""
+    sessionId: str
+    scene: str
+    topic: Optional[str] = None
+    roleMode: Optional[str] = None
+    status: str
+    durationSeconds: Optional[int] = None
+    startedAt: Optional[str] = None
+    endedAt: Optional[str] = None
+    reportStatus: Optional[str] = None   # "generating" | "ready" | "error" | None（尚未生成）
+    sceneScore: Optional[int] = None
+
+
+class ListSessionsResponse(BaseModel):
+    sessions: list[UserSessionSummary]
+    total: int
 
 
 def _parse_uuid(value: str, field_name: str) -> uuid.UUID:
@@ -175,6 +194,117 @@ async def create_session(
         persona=persona_info,
         status="created",
     )
+
+
+@router.get("/interviews", response_model=ListSessionsResponse)
+async def list_user_sessions(
+    limit: int = Query(default=20, ge=1, le=50),
+    offset: int = Query(default=0, ge=0),
+    scene: Optional[str] = Query(default=None),
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    列出当前用户的历史会话及报告状态。按创建时间倒序排列。
+
+    认证：必须登录，只能查看自己的记录。
+    分页：limit 最多 50 条，offset 从 0 开始。
+    筛选：scene 可指定场景类型（interview/restaurant/meeting），不传=全部。
+    """
+    # 构建查询条件
+    conditions = [Interview.user_id == user.id]
+    if scene:
+        conditions.append(Interview.scene == scene)
+
+    # 查询总数
+    count_q = select(func.count()).select_from(Interview).where(*conditions)
+    total_result = await db.execute(count_q)
+    total = total_result.scalar() or 0
+
+    # 查询会话列表，同时预加载关联报告
+    q = (
+        select(Interview)
+        .options(selectinload(Interview.report))
+        .where(*conditions)
+        .order_by(Interview.created_at.desc())
+        .offset(offset)
+        .limit(limit)
+    )
+    result = await db.execute(q)
+    interviews = result.scalars().all()
+
+    sessions = []
+    for interview in interviews:
+        # 提取报告状态和分数
+        report_status = None
+        scene_score = None
+        if interview.report is not None:
+            report_status = "ready"
+            scene_score = interview.report.scene_score
+        elif interview.status == "completed":
+            # 会话已完成但报告尚未生成（可能尚在后台生成中）
+            report_status = "generating"
+
+        sessions.append(UserSessionSummary(
+            sessionId=str(interview.id),
+            scene=interview.scene,
+            topic=interview.topic,
+            roleMode=interview.role_mode,
+            status=interview.status,
+            durationSeconds=interview.duration_seconds,
+            startedAt=interview.started_at.isoformat() if interview.started_at else None,
+            endedAt=interview.ended_at.isoformat() if interview.ended_at else None,
+            reportStatus=report_status,
+            sceneScore=scene_score,
+        ))
+
+    return ListSessionsResponse(sessions=sessions, total=total)
+
+
+@router.delete("/interviews/{session_id}")
+async def delete_session(
+    session_id: str,
+    db: AsyncSession = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """
+    删除指定会话及其关联数据（报告、时间轴事件、Agent日志、音频文件）。
+
+    认证：必须登录，只能删除自己的记录。
+    级联清理顺序：AgentLog → TimelineEvent → Report → Interview → 音频文件。
+    """
+    try:
+        sid = uuid.UUID(session_id)
+    except ValueError:
+        raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
+
+    # 验证会话存在且属于当前用户
+    interview = await db.get(Interview, sid)
+    if interview is None:
+        raise ApiError("SESSION_NOT_FOUND", "会话不存在或已过期", 404)
+    if interview.user_id != user.id:
+        raise ApiError("FORBIDDEN", "无权删除此记录", 403)
+
+    # 按依赖顺序删除关联数据
+    await db.execute(sa_delete(AgentLog).where(AgentLog.interview_id == sid))
+    await db.execute(sa_delete(TimelineEvent).where(TimelineEvent.interview_id == sid))
+    await db.execute(sa_delete(Report).where(Report.interview_id == sid))
+    await db.execute(sa_delete(Interview).where(Interview.id == sid))
+    await db.commit()
+
+    # 清理本地音频文件（失败不影响响应）
+    import shutil
+    from pathlib import Path
+    from config import settings
+
+    try:
+        session_audio_dir = Path(settings.local_storage_dir) / "sessions" / session_id
+        if session_audio_dir.exists():
+            shutil.rmtree(session_audio_dir)
+    except Exception:
+        pass
+
+    return {"deleted": True, "sessionId": session_id}
 
 
 @router.get("/interviews/{session_id}")
