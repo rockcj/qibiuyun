@@ -551,3 +551,23 @@ async def get_session_report(session_id: str, db: AsyncSession = Depends(get_db)
         return _build_generating_response(session_id, interview.scene)
 
     raise ApiError("SESSION_NOT_COMPLETED", "会话尚未结束")
+
+
+# ---------------------------------------------------------------------------
+# ASR 模型切换
+# ---------------------------------------------------------------------------
+@router.post("/asr/switch")
+async def switch_asr_model(request: dict):
+    """切换 ASR 模型（Mini / Max / Max Pro）。"""
+    from services.asr_service import asr_service
+
+    model_name = request.get("model", "max")
+    success = await asr_service.switch_model(model_name)
+    return {"status": "switching" if success else "error", "model": model_name}
+
+
+@router.get("/asr/status")
+async def get_asr_status():
+    """查询 ASR 模型加载状态（前端轮询）。"""
+    from services.asr_service import asr_service
+    return asr_service.status

@@ -232,3 +232,23 @@ export async function getSessionEvents(
   }
   return res.json();
 }
+
+/** 切换 ASR 模型（Mini/Max/Max Pro） */
+export async function switchAsrModel(model: string): Promise<{ status: string }> {
+  const res = await authFetch(`${API_BASE}/api/asr/switch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model }),
+  });
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}
+
+/** 查询 ASR 模型加载状态 */
+export async function getAsrStatus(): Promise<{
+  model: string; whisperModel: string; ready: boolean; switching: boolean;
+}> {
+  const res = await authFetch(`${API_BASE}/api/asr/status`);
+  if (!res.ok) throw new Error(await parseError(res));
+  return res.json();
+}

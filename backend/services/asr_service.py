@@ -141,6 +141,9 @@ class EnergyVAD:
 class ASRService:
     """本地 Whisper 语音识别 — 免费，无需 API Key，无需 ffmpeg。"""
 
+    # 前端显示名 → Whisper 模型名映射
+    MODEL_MAP = {"mini": "tiny", "max": "base", "max-pro": "small"}
+
     def __init__(self):
         self._model = None
         # tiny(39MB) < base(74MB) < small(244MB) < medium(775MB) < large(1.5GB)
@@ -150,6 +153,8 @@ class ASRService:
             self._model_name = "tiny"
         self._loaded: bool = False
         self._use_mock: bool = settings.enable_mock_asr
+        self._switching: bool = False  # 是否正在切换模型
+        self._display_name: str = "mini"  # 当前显示名
 
     def _ensure_model(self):
         """同步加载 Whisper 模型（首次调用时，约 2-3 秒）。"""
@@ -173,6 +178,44 @@ class ASRService:
         if self._use_mock:
             return
         await asyncio.to_thread(self._ensure_model)
+        # 根据加载的模型名反查显示名
+        for display, whisper_name in self.MODEL_MAP.items():
+            if whisper_name == self._model_name:
+                self._display_name = display
+                break
+
+    async def switch_model(self, display_name: str) -> bool:
+        """切换 ASR 模型（异步加载，不阻塞）。返回是否开始切换。"""
+        whisper_name = self.MODEL_MAP.get(display_name)
+        if not whisper_name:
+            return False
+        if whisper_name == self._model_name and self._loaded:
+            return True  # 已是当前模型，无需切换
+
+        self._switching = True
+        self._loaded = False
+        self._model = None
+        self._model_name = whisper_name
+        self._display_name = display_name
+
+        try:
+            await asyncio.to_thread(self._ensure_model)
+            self._switching = False
+            return True
+        except Exception as exc:
+            print(f"[ASR] Model switch failed: {exc}")
+            self._switching = False
+            return False
+
+    @property
+    def status(self) -> dict:
+        """返回当前 ASR 模型状态（供前端轮询）。"""
+        return {
+            "model": self._display_name,
+            "whisperModel": self._model_name,
+            "ready": self._loaded and not self._switching,
+            "switching": self._switching,
+        }
 
     async def transcribe(
         self, pcm_bytes: bytes, sample_rate: int = 16000
@@ -202,10 +245,11 @@ class ASRService:
             audio_np = np.frombuffer(pcm_bytes, dtype=np.int16).astype(np.float32) / 32768.0
 
             # 在线程池中运行（Whisper 推理是 CPU 密集操作）
+            # 不指定 language，让 Whisper 自动检测语言
+            # 中文会被正确识别为中文（而非幻觉英文），后续由 asr_filter 拦截非英文输入
             result = await asyncio.to_thread(
                 self._model.transcribe,
                 audio_np,
-                language="en",
                 fp16=False,
                 verbose=False,
             )
