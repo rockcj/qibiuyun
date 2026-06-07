@@ -707,22 +707,32 @@ async def get_asr_status():
 # Demo 预置数据端点（用于 /demo 离线路由）
 # ---------------------------------------------------------------------------
 DEMO_SESSION_UUID = uuid.UUID("de000001-0000-0000-0000-000000000001")
+DEMO_RESTAURANT_SESSION_UUID = uuid.UUID("de000002-0000-0000-0000-000000000002")
+DEMO_MEETING_SESSION_UUID = uuid.UUID("de000003-0000-0000-0000-000000000003")
+
+# 场景 → Demo UUID 映射
+_DEMO_UUID_MAP = {
+    "interview": DEMO_SESSION_UUID,
+    "restaurant": DEMO_RESTAURANT_SESSION_UUID,
+    "meeting": DEMO_MEETING_SESSION_UUID,
+}
 
 
 @router.get("/demo")
-async def get_demo_data(db: AsyncSession = Depends(get_db)):
+async def get_demo_data(scene: str = "interview", db: AsyncSession = Depends(get_db)):
     """
     返回预置 demo 会话的完整数据（分析 + 报告 + 时间轴）。
-    无需认证，直接返回 demo_interview_001 的数据。
+    无需认证，支持 scene 参数切换场景（interview / restaurant / meeting）。
     """
-    interview = await _get_interview_with_report(db, DEMO_SESSION_UUID)
+    demo_uuid = _DEMO_UUID_MAP.get(scene, DEMO_SESSION_UUID)
+    interview = await _get_interview_with_report(db, demo_uuid)
     if interview is None:
-        raise ApiError("NOT_FOUND", "Demo 数据尚未初始化，请重启后端服务", 404)
+        raise ApiError("NOT_FOUND", f"Demo 数据尚未初始化（{scene}），请重启后端服务", 404)
 
     # 加载时间轴事件
     events_result = await db.execute(
         select(TimelineEvent)
-        .where(TimelineEvent.interview_id == DEMO_SESSION_UUID)
+        .where(TimelineEvent.interview_id == demo_uuid)
         .order_by(TimelineEvent.start_ms)
     )
     timeline_rows = events_result.scalars().all()
@@ -733,7 +743,7 @@ async def get_demo_data(db: AsyncSession = Depends(get_db)):
         enrich_analysis_from_timeline,
     )
     analysis = build_analysis_response(
-        str(DEMO_SESSION_UUID),
+        str(demo_uuid),
         interview.metrics_json,
         interview.transcript,
         full_audio_url=interview.audio_url,
@@ -742,13 +752,13 @@ async def get_demo_data(db: AsyncSession = Depends(get_db)):
 
     # 构建 report 响应
     if interview.report is not None:
-        report = _build_report_response(interview.report, str(DEMO_SESSION_UUID), interview.scene)
+        report = _build_report_response(interview.report, str(demo_uuid), interview.scene)
     else:
-        report = _build_generating_response(str(DEMO_SESSION_UUID), interview.scene)
+        report = _build_generating_response(str(demo_uuid), interview.scene)
 
     # 构建 events 响应
     events = {
-        "sessionId": str(DEMO_SESSION_UUID),
+        "sessionId": str(demo_uuid),
         "events": [{
             "eventId": str(e.id), "turnId": e.turn_id, "eventType": e.event_type,
             "severity": e.severity, "title": e.title, "description": e.description,
