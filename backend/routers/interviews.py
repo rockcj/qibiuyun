@@ -701,3 +701,65 @@ async def get_asr_status():
     """查询 ASR 模型加载状态（前端轮询）。"""
     from services.asr_service import asr_service
     return asr_service.status
+
+
+# ---------------------------------------------------------------------------
+# Demo 预置数据端点（用于 /demo 离线路由）
+# ---------------------------------------------------------------------------
+DEMO_SESSION_UUID = uuid.UUID("de000001-0000-0000-0000-000000000001")
+
+
+@router.get("/demo")
+async def get_demo_data(db: AsyncSession = Depends(get_db)):
+    """
+    返回预置 demo 会话的完整数据（分析 + 报告 + 时间轴）。
+    无需认证，直接返回 demo_interview_001 的数据。
+    """
+    interview = await _get_interview_with_report(db, DEMO_SESSION_UUID)
+    if interview is None:
+        raise ApiError("NOT_FOUND", "Demo 数据尚未初始化，请重启后端服务", 404)
+
+    # 加载时间轴事件
+    events_result = await db.execute(
+        select(TimelineEvent)
+        .where(TimelineEvent.interview_id == DEMO_SESSION_UUID)
+        .order_by(TimelineEvent.start_ms)
+    )
+    timeline_rows = events_result.scalars().all()
+
+    # 构建 analysis 响应
+    from services.session_persist_service import (
+        build_analysis_response,
+        enrich_analysis_from_timeline,
+    )
+    analysis = build_analysis_response(
+        str(DEMO_SESSION_UUID),
+        interview.metrics_json,
+        interview.transcript,
+        full_audio_url=interview.audio_url,
+    )
+    analysis = enrich_analysis_from_timeline(analysis, timeline_rows)
+
+    # 构建 report 响应
+    if interview.report is not None:
+        report = _build_report_response(interview.report, str(DEMO_SESSION_UUID), interview.scene)
+    else:
+        report = _build_generating_response(str(DEMO_SESSION_UUID), interview.scene)
+
+    # 构建 events 响应
+    events = {
+        "sessionId": str(DEMO_SESSION_UUID),
+        "events": [{
+            "eventId": str(e.id), "turnId": e.turn_id, "eventType": e.event_type,
+            "severity": e.severity, "title": e.title, "description": e.description,
+            "startMs": e.start_ms, "endMs": e.end_ms,
+            "transcriptSnippet": e.transcript_snippet, "evidence": e.evidence,
+            "suggestion": e.suggestion, "displayPriority": e.display_priority,
+        } for e in timeline_rows],
+    }
+
+    return {
+        "analysis": analysis,
+        "report": report,
+        "events": events,
+    }

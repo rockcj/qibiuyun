@@ -31,6 +31,7 @@ function StatusBadge({ status }: { status: ConnectionStatus }) {
     mic_ready: "bg-emerald-500",
     connected: "bg-emerald-400",
     connecting: "bg-amber-500 animate-pulse",
+    reconnecting: "bg-amber-500 animate-pulse",
     disconnected: "bg-zinc-400",
     error: "bg-red-500",
   };
@@ -38,6 +39,7 @@ function StatusBadge({ status }: { status: ConnectionStatus }) {
     mic_ready: "就绪",
     connected: "已连接",
     connecting: "连接中…",
+    reconnecting: "重连中…",
     disconnected: "未连接",
     error: "错误",
   };
@@ -478,7 +480,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
   );
 
   // ---- WebSocket ----
-  const { status: wsStatus, sendMessage } = useWebSocket({
+  const { status: wsStatus, sendMessage, reconnectAttempt, maxReconnects } = useWebSocket({
     url: session.websocketUrl,
     onMessage: handleWsMessage,
   });
@@ -831,6 +833,16 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
 
         {/* ---- 底部输入 ---- */}
         <div className="sticky bottom-0 border-t border-zinc-200/60 bg-white/80 py-4 backdrop-blur-xl">
+          {/* 重连提示条 — WebSocket 断线自动恢复中 */}
+          {wsStatus === "reconnecting" && (
+            <div className="mb-3">
+              <SessionNoticeBanner
+                kind="warning"
+                message={`连接断开，正在重连…（第 ${reconnectAttempt}/${maxReconnects} 次）`}
+              />
+            </div>
+          )}
+
           {/* 会话提示条 */}
           {sessionNotice && (
             <div className="mb-3">

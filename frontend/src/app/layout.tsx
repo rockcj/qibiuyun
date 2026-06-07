@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { LocaleProvider } from "@/i18n/LocaleContext";
+import { ToastProvider } from "@/contexts/ToastContext";
 import AppShell from "@/components/AppShell";
 import LanguageSwitcher from "@/components/LanguageSwitcher";
 import "./globals.css";
@@ -36,8 +37,10 @@ export default function RootLayout({
       <body className="h-full flex flex-col">
         <AuthProvider>
           <LocaleProvider>
-            <AppShell>{children}</AppShell>
-            <LanguageSwitcher />
+            <ToastProvider>
+              <AppShell>{children}</AppShell>
+              <LanguageSwitcher />
+            </ToastProvider>
           </LocaleProvider>
         </AuthProvider>
       </body>

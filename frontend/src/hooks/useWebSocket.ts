@@ -10,6 +10,7 @@ export type ConnectionStatus =
   | "disconnected"   // 未连接
   | "connecting"     // 正在建立 WebSocket 连接
   | "connected"      // WebSocket 已连接，等待麦克风就绪
+  | "reconnecting"   // 连接断开，正在自动重连
   | "mic_ready"      // 麦克风就绪，可以开始对话
   | "error";         // 连接失败（WebSocket 错误或麦克风拒绝）
 
@@ -27,6 +28,10 @@ interface UseWebSocketReturn {
   connect: () => void;
   disconnect: () => void;
   error: string | null;
+  /** 当前重连尝试次数（从 1 开始），用于 UI 展示 */
+  reconnectAttempt: number;
+  /** 最大重连次数 */
+  maxReconnects: number;
 }
 
 /** React Strict Mode 下延迟建连，避免 mount/unmount 连续触发 accept→close 风暴 */
@@ -156,14 +161,18 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         if (wsRef.current === ws) {
           wsRef.current = null;
         }
-        if (!mountedRef.current || wsRef.current !== null) return;
-        setStatus("disconnected");
+        if (!mountedRef.current) return;
 
+        // 非正常关闭时尝试重连
         if (event.code !== 1000 && reconnectCount.current < maxReconnects) {
           reconnectCount.current += 1;
+          setStatus("reconnecting");
+          console.log(`[WS] Reconnecting ${reconnectCount.current}/${maxReconnects}...`);
           reconnectTimer.current = setTimeout(() => {
             if (mountedRef.current) connect();
           }, reconnectInterval);
+        } else {
+          setStatus("disconnected");
         }
       };
     } catch (err) {
@@ -217,5 +226,13 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
     };
   }, [url, autoConnect, scheduleConnect, clearReconnectTimer, clearConnectDelayTimer, teardownWebSocket]);
 
-  return { status, sendMessage, connect, disconnect, error };
+  return {
+    status,
+    sendMessage,
+    connect,
+    disconnect,
+    error,
+    reconnectAttempt: reconnectCount.current,
+    maxReconnects,
+  };
 }
