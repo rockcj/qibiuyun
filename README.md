@@ -129,6 +129,82 @@ qibiuyun/
 - **LLM**：DeepSeek V4 Pro（流式对话）
 - **ASR/TTS**：本地 Whisper + EdgeTTS（免费方案已接入）
 
+## 第三方依赖说明
+
+> 依据项目规则：引用第三方库、框架或模板，必须在 README 中说明来源与用途。
+> 除下表所列第三方依赖外，其余全部代码均为原创实现。
+
+### 后端依赖（Python）
+
+| 包名 | 版本 | 用途 | 来源 |
+|------|------|------|------|
+| fastapi | 0.115.6 | Web 框架，提供 REST API 和 WebSocket 支持 | 第三方开源 (MIT) |
+| uvicorn | 0.34.0 | ASGI 服务器，运行 FastAPI 应用 | 第三方开源 (BSD) |
+| sqlalchemy | 2.0.36 | 异步 ORM，数据库模型与查询 | 第三方开源 (MIT) |
+| asyncpg | 0.30.0 | PostgreSQL 异步驱动（生产环境） | 第三方开源 (Apache 2.0) |
+| aiosqlite | 0.20.0 | SQLite 异步驱动（开发环境兜底） | 第三方开源 (MIT) |
+| psycopg2-binary | 2.9.10 | PostgreSQL 同步驱动（迁移脚本使用） | 第三方开源 (LGPL) |
+| redis | 5.2.1 | Redis 客户端，缓存与会话状态 | 第三方开源 (MIT) |
+| pydantic | 2.10.3 | 数据校验与序列化 | 第三方开源 (MIT) |
+| pydantic-settings | 2.7.0 | 环境变量加载与配置管理 | 第三方开源 (MIT) |
+| python-dotenv | 1.0.1 | `.env` 文件解析 | 第三方开源 (BSD) |
+| httpx | 0.28.1 | 异步 HTTP 客户端（调用 LLM API / TTS） | 第三方开源 (BSD) |
+| websockets | 14.1 | WebSocket 协议支持 | 第三方开源 (BSD) |
+| python-multipart | 0.0.19 | 表单/文件上传解析 | 第三方开源 (Apache 2.0) |
+| python-jose | ≥3.3.0 | JWT 令牌创建与验证 | 第三方开源 (MIT) |
+| bcrypt | ≥4.0.0 | 密码哈希 | 第三方开源 (Apache 2.0) |
+| email-validator | ≥2.0.0 | 邮箱格式校验 | 第三方开源 (Unlicense) |
+| openai-whisper | 20250625 | 本地语音识别 (ASR) | 第三方开源 (MIT, OpenAI) |
+| torch | ≥2.0.0 | 深度学习框架（Whisper 依赖） | 第三方开源 (BSD, Meta) |
+| numpy | ≥1.26.0 | 数值计算（音频处理） | 第三方开源 (BSD) |
+| edge-tts | 6.1.12 | 微软 Edge 在线文字转语音 | 第三方开源 (GPLv3) |
+| pypdf | 5.1.0 | PDF 文件文本提取 | 第三方开源 (BSD) |
+| openai | 2.41.0 | OpenAI SDK（兼容 DeepSeek API 调用） | 第三方开源 (Apache 2.0) |
+| tos | ≥2.6.0 | 火山引擎对象存储 SDK（音频文件存储） | 火山引擎云服务 SDK |
+| alembic | 1.14.0 | 数据库迁移工具（已安装，当前使用原始 SQL） | 第三方开源 (MIT) |
+
+### 前端依赖（Node.js）
+
+| 包名 | 版本 | 用途 | 来源 |
+|------|------|------|------|
+| next | 16.2.6 | React 全栈框架（App Router + Turbopack） | 第三方开源 (MIT, Vercel) |
+| react | 19.2.4 | UI 组件库 | 第三方开源 (MIT, Meta) |
+| react-dom | 19.2.4 | React DOM 渲染 | 第三方开源 (MIT, Meta) |
+| tailwindcss | ^4 | 原子化 CSS 框架 | 第三方开源 (MIT) |
+| @tailwindcss/postcss | ^4 | Tailwind CSS v4 PostCSS 插件 | 第三方开源 (MIT) |
+| typescript | ^5 | JavaScript 类型检查 | 第三方开源 (Apache 2.0, Microsoft) |
+| eslint | ^9 | JavaScript/TypeScript 代码检查 | 第三方开源 (MIT) |
+| eslint-config-next | 16.2.6 | Next.js 项目 ESLint 预设规则 | 第三方开源 (MIT, Vercel) |
+
+> **说明**：前端未使用任何第三方 UI 组件库（如 MUI、Ant Design、shadcn/ui），所有界面组件（RadarChart、TimelineViewer、Sidebar、Toast 等）均为纯原创实现。状态管理仅使用 React Context，未引入 Redux/Zustand 等第三方状态库。国际化自建 `LocaleContext`，未使用 i18next 等第三方库。
+
+### 基础设施
+
+| 软件 | 最低版本 | 用途 | 来源 |
+|------|----------|------|------|
+| PostgreSQL | 15 | 关系型数据库 | 第三方开源 (PostgreSQL License) |
+| Redis | 7 | 内存缓存与会话状态 | 第三方开源 (BSD) |
+| Docker | 24 | 容器化运行基础设施 | 第三方 (Docker Inc.) |
+
+### LLM / AI 服务
+
+| 服务 | 模型 | 用途 | 来源 |
+|------|------|------|------|
+| DeepSeek API | deepseek-v4-flash | 实时对话生成（流式） | 第三方云服务 (DeepSeek) |
+| DeepSeek API | deepseek-v4-pro | 报告生成与结构化分析 | 第三方云服务 (DeepSeek) |
+| EdgeTTS | en-US-JennyNeural | 在线文字转语音 | 第三方云服务 (Microsoft) |
+| 火山引擎 TOS | — | 音频文件对象存储 | 第三方云服务 (字节跳动) |
+
+### 原创代码范围
+
+以下模块为**完全原创实现**，不依赖第三方框架或模板：
+
+- **Agent 系统**：Grammar Agent（规则引擎 + LLM 增强）、Pronunciation Agent（WPM/停顿/置信度计算）、Report Agent（场景报告生成）、ASR Filter（8 层过滤）
+- **实时语音管线**：EnergyVAD（能量语音活动检测）、ConnectionManager（WebSocket 消息路由）、Turn Manager（轮流对话状态机）
+- **前端组件**：VoiceSessionPanel（实时对话面板）、SessionReportPanel（报告面板）、RadarChart（SVG 雷达图）、TimelineViewer（VAR 时间轴）、TranscriptReplayPanel（音频回放）
+- **业务服务**：SceneService（三场景配置）、ConversationService（场景 Prompt 编排）、ResumeService（简历解析）、JobService（JD 解析）
+- **降级系统**：三层 Demo 降级（API → localStorage → 静态数据）、WebSocket 断线重连、Redis → 内存缓存自动切换
+
 ## Step 4：实时轻纠正 & 异步发音/语法分析
 
 ### 原创功能说明
