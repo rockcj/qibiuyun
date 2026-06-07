@@ -239,7 +239,7 @@ qibiuyun/
 - **业务服务**：SceneService（三场景配置）、ConversationService（场景 Prompt 编排）、ResumeService（简历解析）、JobService（JD 解析）
 - **降级系统**：三层 Demo 降级（API → localStorage → 静态数据）、WebSocket 断线重连、Redis → 内存缓存自动切换
 
-## Step 4：实时轻纠正 & 异步发音/语法分析
+## 实时轻纠正 & 异步发音/语法分析
 
 ### 原创功能说明
 
@@ -263,7 +263,7 @@ qibiuyun/
 python -m pytest tests/backend/test_grammar_agent.py tests/backend/test_pronunciation_agent.py tests/backend/test_websocket_handler.py -v
 ```
 
-## Step 5-6：Demo 稳定性打磨与降级路径
+##  稳定性打磨与降级路径
 
 ### 新增功能
 
