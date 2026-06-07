@@ -5,6 +5,7 @@ import type {
   CreateSessionRequest,
   CreateSessionResponse,
   JobCreateResponse,
+  ListSessionsResponse,
   ResumeUploadResponse,
   SceneFull,
   SessionAnalysisResponse,
@@ -177,6 +178,31 @@ export async function createSession(
     throw new Error(await parseError(res));
   }
   return res.json();
+}
+
+/** 获取用户历史会话列表（含分页和场景筛选） */
+export async function listUserSessions(
+  limit = 20,
+  offset = 0,
+  scene?: string
+): Promise<ListSessionsResponse> {
+  let url = `${API_BASE}/api/interviews?limit=${limit}&offset=${offset}`;
+  if (scene) url += `&scene=${encodeURIComponent(scene)}`;
+  const res = await authFetch(url, { cache: "no-store" });
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
+  return res.json();
+}
+
+/** 删除指定会话及其关联数据 */
+export async function deleteSession(sessionId: string): Promise<void> {
+  const res = await authFetch(`${API_BASE}/api/interviews/${sessionId}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    throw new Error(await parseError(res));
+  }
 }
 
 /** 结束训练会话 */

@@ -364,3 +364,23 @@ export interface SessionEventsResponse {
   sessionId: string;
   events: TimelineEventItem[];
 }
+
+/** 用户历史会话摘要（首页面试记录列表） */
+export interface UserSessionSummary {
+  sessionId: string;
+  scene: string;
+  topic: string | null;
+  roleMode: string | null;
+  status: string;
+  durationSeconds: number | null;
+  startedAt: string | null;
+  endedAt: string | null;
+  reportStatus: string | null;  // "generating" | "ready" | "error" | null
+  sceneScore: number | null;
+}
+
+/** 用户历史会话列表响应 */
+export interface ListSessionsResponse {
+  sessions: UserSessionSummary[];
+  total: number;
+}
