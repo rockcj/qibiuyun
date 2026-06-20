@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import {
+  ACCESS_TOKEN_KEY,
+  clearAccessTokenCookie,
+  isAccessTokenValid,
+} from "@/lib/authTokens";
 
 /** 无需登录即可访问的路径 */
 const PUBLIC_PATHS = ["/login", "/register", "/demo"];
@@ -20,24 +25,32 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  // 公开页面：已登录则跳回首页，未登录则放行
+  // 公开页面：仅「有效 token」视为已登录；过期 cookie 需清除以免挡住登录页
   const isPublic = PUBLIC_PATHS.some((p) => pathname.startsWith(p));
-  const accessToken = request.cookies.get("offergpt-access-token")?.value;
+  const accessToken = request.cookies.get(ACCESS_TOKEN_KEY)?.value;
+  const hasValidToken = isAccessTokenValid(accessToken);
 
   if (isPublic) {
-    if (accessToken) {
+    if (hasValidToken) {
       return NextResponse.redirect(new URL("/", request.url));
+    }
+    if (accessToken) {
+      const response = NextResponse.next();
+      clearAccessTokenCookie(response);
+      return response;
     }
     return NextResponse.next();
   }
 
-  // 受限页面：无 token 则重定向到登录
-  // 注意：demo 模式也放行（token 可能为空但后端会回退到 demo 用户）
-  // 此处仅做基础检查，严格验证在后端 get_current_user 中完成
-  if (!accessToken) {
+  // 受限页面：无有效 token 则重定向到登录
+  if (!hasValidToken) {
     const loginUrl = new URL("/login", request.url);
     loginUrl.searchParams.set("redirect", pathname);
-    return NextResponse.redirect(loginUrl);
+    const response = NextResponse.redirect(loginUrl);
+    if (accessToken) {
+      clearAccessTokenCookie(response);
+    }
+    return response;
   }
 
   return NextResponse.next();

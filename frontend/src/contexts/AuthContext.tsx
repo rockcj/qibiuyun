@@ -8,6 +8,13 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import {
+  clearTokens,
+  getStoredTokens,
+  isAccessTokenValid,
+  storeTokens,
+  type AuthTokens,
+} from "@/lib/authTokens";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -18,11 +25,6 @@ export interface AuthUser {
   name: string | null;
   avatarUrl: string | null;
   plan: string;
-}
-
-interface AuthTokens {
-  accessToken: string;
-  refreshToken: string;
 }
 
 interface AuthContextValue {
@@ -39,57 +41,17 @@ interface AuthContextValue {
 // Constants
 // ---------------------------------------------------------------------------
 const ACCESS_TOKEN_KEY = "offergpt-access-token";
-const REFRESH_TOKEN_KEY = "offergpt-refresh-token";
 
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:8000";
 
-// ---------------------------------------------------------------------------
-// Token helpers
-// ---------------------------------------------------------------------------
-function getStoredTokens(): AuthTokens | null {
-  try {
-    const accessToken = localStorage.getItem(ACCESS_TOKEN_KEY);
-    const refreshToken = localStorage.getItem(REFRESH_TOKEN_KEY);
-    if (accessToken && refreshToken) {
-      return { accessToken, refreshToken };
-    }
-  } catch {
-    // localStorage 不可用（SSR / 隐私模式）
-  }
-  return null;
-}
+/** 无需强制跳转登录的公开路径 */
+const PUBLIC_PATH_PREFIXES = ["/login", "/register", "/demo"];
 
-function storeTokens(tokens: AuthTokens) {
-  try {
-    localStorage.setItem(ACCESS_TOKEN_KEY, tokens.accessToken);
-    localStorage.setItem(REFRESH_TOKEN_KEY, tokens.refreshToken);
-    // 同步写入 cookie 供 middleware 读取（httpOnly=false 简化版）
-    document.cookie = `${ACCESS_TOKEN_KEY}=${tokens.accessToken};path=/;max-age=2592000;SameSite=Lax`;
-  } catch {
-    // ignore
-  }
-}
-
-function clearTokens() {
-  try {
-    localStorage.removeItem(ACCESS_TOKEN_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
-    document.cookie = `${ACCESS_TOKEN_KEY}=;path=/;max-age=0`;
-  } catch {
-    // ignore
-  }
-}
-
-function getJwtPayload(token: string): { exp?: number } | null {
-  try {
-    const base64 = token.split(".")[1];
-    return JSON.parse(atob(base64));
-  } catch {
-    return null;
-  }
+function isPublicPath(pathname: string): boolean {
+  return pathname === "/" || PUBLIC_PATH_PREFIXES.some((p) => pathname.startsWith(p));
 }
 
 // ---------------------------------------------------------------------------
@@ -154,6 +116,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return null;
   }, []);
 
+  // 会话恢复失败：清除残留 token，必要时跳转登录
+  const handleInvalidSession = useCallback(() => {
+    clearTokens();
+    setUser(null);
+
+    const pathname = window.location.pathname;
+    if (isPublicPath(pathname)) {
+      // 首页等公开页：若曾持有失效 token，引导重新登录
+      if (pathname === "/") {
+        window.location.href = "/login";
+      }
+      return;
+    }
+
+    window.location.href = `/login?redirect=${encodeURIComponent(pathname)}`;
+  }, []);
+
   // 退出登录
   const logout = useCallback(() => {
     clearTokens();
@@ -203,12 +182,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      // 检查 access token 是否过期
-      const payload = getJwtPayload(tokens.accessToken);
-      const now = Math.floor(Date.now() / 1000);
-
-      if (payload?.exp && payload.exp > now + 60) {
-        // token 有效，直接验证
+      // access token 仍有效时直接拉用户信息
+      if (isAccessTokenValid(tokens.accessToken)) {
         const u = await fetchMe(tokens.accessToken);
         if (!cancelled && u) {
           setUser(u);
@@ -217,21 +192,30 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // token 即将过期或无效，尝试刷新
+      // access 失效或 /me 失败，尝试 refresh
       const newTokens = await refreshAccessToken(tokens.refreshToken);
       if (newTokens && !cancelled) {
         storeTokens(newTokens);
         const u = await fetchMe(newTokens.accessToken);
         if (u) {
           setUser(u);
+          setIsLoading(false);
+          return;
         }
       }
-      if (!cancelled) setIsLoading(false);
+
+      // 本地 token 已不可用：清除并引导重新登录
+      if (!cancelled) {
+        setIsLoading(false);
+        handleInvalidSession();
+      }
     }
 
     init();
-    return () => { cancelled = true; };
-  }, [fetchMe, refreshAccessToken]);
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchMe, refreshAccessToken, handleInvalidSession]);
 
   return (
     <AuthContext.Provider

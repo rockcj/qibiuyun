@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLocale } from "@/i18n/LocaleContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { useMicrophone } from "@/hooks/useMicrophone";
 import { useWebSocket, type ConnectionStatus } from "@/hooks/useWebSocket";
+import { buildWebSocketUrlWithToken } from "@/lib/authTokens";
 import type { CreateSessionResponse, TurnRecord, WsServerMessage } from "@/types/api";
 import CorrectionToast from "@/components/CorrectionToast";
 import SessionNoticeBanner, { type SessionNoticeKind } from "@/components/SessionNoticeBanner";
@@ -54,6 +56,8 @@ function StatusBadge({ status }: { status: ConnectionStatus }) {
 export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
   const { t } = useLocale();
   const router = useRouter();
+  const { getAccessToken, isLoading: authLoading } = useAuth();
+  const accessToken = getAccessToken();
 
   // ---- 输入模式 ----
   const [inputMode, setInputMode] = useState<"text" | "voice">("voice");
@@ -480,8 +484,15 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
   );
 
   // ---- WebSocket ----
+  // 非 demo 模式下后端要求 ?token=JWT，需从 localStorage 注入
+  const websocketUrl = useMemo(
+    () => buildWebSocketUrlWithToken(session.websocketUrl, accessToken),
+    [session.websocketUrl, accessToken]
+  );
+
   const { status: wsStatus, sendMessage, reconnectAttempt, maxReconnects } = useWebSocket({
-    url: session.websocketUrl,
+    url: websocketUrl,
+    autoConnect: !authLoading,
     onMessage: handleWsMessage,
   });
   sendMessageRef.current = sendMessage;
