@@ -1,5 +1,10 @@
 /** 前端 API 客户端，封装与后端的 REST 调用 */
 
+import {
+  clearTokens,
+  getStoredTokens,
+  storeTokens,
+} from "@/lib/authTokens";
 import type {
   ApiErrorBody,
   CreateSessionRequest,
@@ -18,47 +23,19 @@ const API_BASE =
   process.env.NEXT_PUBLIC_API_URL ||
   "http://localhost:8000";
 
-const ACCESS_TOKEN_KEY = "offergpt-access-token";
-const REFRESH_TOKEN_KEY = "offergpt-refresh-token";
-
 /** 从 localStorage 读取 access token */
 function getAccessToken(): string | null {
-  try {
-    return localStorage.getItem(ACCESS_TOKEN_KEY);
-  } catch {
-    return null;
-  }
+  return getStoredTokens()?.accessToken ?? null;
 }
 
 /** 从 localStorage 读取 refresh token */
 function getRefreshToken(): string | null {
-  try {
-    return localStorage.getItem(REFRESH_TOKEN_KEY);
-  } catch {
-    return null;
-  }
+  return getStoredTokens()?.refreshToken ?? null;
 }
 
 /** 保存新 token 对 */
 function saveTokens(accessToken: string, refreshToken: string) {
-  try {
-    localStorage.setItem(ACCESS_TOKEN_KEY, accessToken);
-    localStorage.setItem(REFRESH_TOKEN_KEY, refreshToken);
-    document.cookie = `${ACCESS_TOKEN_KEY}=${accessToken};path=/;max-age=2592000;SameSite=Lax`;
-  } catch {
-    // ignore
-  }
-}
-
-/** 清除 token */
-function clearTokens() {
-  try {
-    localStorage.removeItem(ACCESS_TOKEN_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_KEY);
-    document.cookie = `${ACCESS_TOKEN_KEY}=;path=/;max-age=0`;
-  } catch {
-    // ignore
-  }
+  storeTokens({ accessToken, refreshToken });
 }
 
 /** 尝试用 refresh token 刷新 access token */

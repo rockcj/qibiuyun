@@ -163,6 +163,13 @@ export function useWebSocket(options: UseWebSocketOptions): UseWebSocketReturn {
         }
         if (!mountedRef.current) return;
 
+        // 鉴权失败（4001）时不再重连，避免 accept→close 风暴
+        if (event.code === 4001) {
+          setStatus("error");
+          setError(event.reason || "WebSocket 鉴权失败，请重新登录");
+          return;
+        }
+
         // 非正常关闭时尝试重连
         if (event.code !== 1000 && reconnectCount.current < maxReconnects) {
           reconnectCount.current += 1;
