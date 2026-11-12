@@ -160,9 +160,64 @@ export interface WsTtsAudioDelta {
   type: "tts.audio.delta";
   sessionId: string;
   turnId: string;
-  codec: "mp3";
+  /** mp3 = 本地 EdgeTTS；pcm16 = 云端语音（需按 sampleRate 用 WebAudio 播放） */
+  codec: "mp3" | "pcm16";
+  /** 仅 pcm16 有值，单位 Hz */
+  sampleRate?: number;
   payload: string; // base64
   text?: string;
+}
+
+/** 语音引擎标识 */
+export type VoiceEngineId = "local" | "volcengine";
+
+/** 语音引擎状态（连接后由服务端同步） */
+export interface WsVoiceEngineState {
+  type: "voice.engine.state";
+  sessionId: string;
+  voiceEngine: VoiceEngineId;
+  /** 云端引擎是否已配置可用 */
+  available?: boolean;
+  defaultEngine?: VoiceEngineId;
+  /** 不可用原因 */
+  reason?: string;
+}
+
+/** 运行时切换语音引擎（上行） */
+export interface WsControlVoiceEngine {
+  type: "control.voice_engine";
+  sessionId: string;
+  voiceEngine: VoiceEngineId;
+}
+
+/** 麦克风开关同步（上行，云端引擎据此发送 mute/unmute） */
+export interface WsControlListening {
+  type: "control.listening";
+  sessionId: string;
+  listening: boolean;
+}
+
+/** 单个语音引擎信息 */
+export interface VoiceEngineInfo {
+  id: VoiceEngineId;
+  displayName: string;
+  description: string;
+  available: boolean;
+  reason: string;
+  latencyHint?: string;
+  provider?: string;
+  model?: string;
+  voice?: string;
+}
+
+/** GET /api/voices */
+export interface VoiceEnginesResponse {
+  voiceEngines: VoiceEngineInfo[];
+  defaultEngine: VoiceEngineId;
+  audio: {
+    input: { codec: string; sampleRate: number };
+    output: { cloud: { codec: string; sampleRate: number } };
+  };
 }
 
 /** 服务端 TTS 不可用，前端应使用浏览器 speechSynthesis 降级朗读 */
@@ -261,6 +316,7 @@ export type WsServerMessage =
   | WsTtsUnavailable
   | WsCorrectionLight
   | WsCorrectionState
+  | WsVoiceEngineState
   | WsAnalysisCounter
   | WsControlFinish
   | WsAsrUnavailable

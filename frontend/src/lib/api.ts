@@ -16,6 +16,7 @@ import type {
   SessionAnalysisResponse,
   SessionEventsResponse,
   SessionReportResponse,
+  VoiceEnginesResponse,
 } from "@/types/api";
 
 const API_BASE =
@@ -105,6 +106,18 @@ export async function fetchScenes(full = true): Promise<SceneFull[]> {
   if (!res.ok) return [];
   const data = await res.json();
   return data.scenes || [];
+}
+
+/** 获取可用语音引擎（本地管线 / 豆包云端全双工） */
+export async function fetchVoiceEngines(): Promise<VoiceEnginesResponse | null> {
+  try {
+    const res = await fetch(`${API_BASE}/api/voices`, { cache: "no-store" });
+    if (!res.ok) return null;
+    return (await res.json()) as VoiceEnginesResponse;
+  } catch {
+    // 网络异常时不阻塞会话页渲染，前端按「仅本地可用」处理
+    return null;
+  }
 }
 
 /** 上传简历文件 */

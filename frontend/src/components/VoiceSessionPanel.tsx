@@ -6,12 +6,21 @@ import { useRouter } from "next/navigation";
 import { useLocale } from "@/i18n/LocaleContext";
 import { useAuth } from "@/contexts/AuthContext";
 import { useMicrophone } from "@/hooks/useMicrophone";
+import { usePcmPlayer } from "@/hooks/usePcmPlayer";
 import { useWebSocket, type ConnectionStatus } from "@/hooks/useWebSocket";
 import { buildWebSocketUrlWithToken } from "@/lib/authTokens";
-import type { CreateSessionResponse, TurnRecord, WsServerMessage } from "@/types/api";
+import type {
+  CreateSessionResponse,
+  TurnRecord,
+  VoiceEngineId,
+  WsServerMessage,
+} from "@/types/api";
 import CorrectionToast from "@/components/CorrectionToast";
 import SessionNoticeBanner, { type SessionNoticeKind } from "@/components/SessionNoticeBanner";
-import { finishSession } from "@/lib/api";
+import { fetchVoiceEngines, finishSession } from "@/lib/api";
+
+/** 用户选择的语音引擎本地持久化 key */
+const VOICE_ENGINE_STORAGE_KEY = "offergpt:voiceEngine";
 
 // 生成全局唯一 ID，避免 React 用 index 做 key 导致聊天框抖动
 // 兼容不支持 crypto.randomUUID() 的旧浏览器
@@ -62,6 +71,13 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
   // ---- 输入模式 ----
   const [inputMode, setInputMode] = useState<"text" | "voice">("voice");
   const [textInput, setTextInput] = useState("");
+  // ---- 语音引擎（本地管线 / 云端豆包全双工） ----
+  const [voiceEngine, setVoiceEngine] = useState<VoiceEngineId>("local");
+  const voiceEngineRef = useRef<VoiceEngineId>("local");
+  // 云端引擎是否可用（由 GET /api/voices 与 WS voice.engine.state 共同决定）
+  const [cloudAvailable, setCloudAvailable] = useState(false);
+  const [cloudReason, setCloudReason] = useState("");
+  const [engineSwitching, setEngineSwitching] = useState(false);
   // 语音模式就绪追踪：只有 WS 已连 + 麦克风 active 才为 true
   const [voiceReady, setVoiceReady] = useState(false);
   // 麦克风初始化开始时间（用于 5 秒超时降级）
@@ -114,7 +130,13 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
   const setMutedRef = useRef<(muted: boolean) => void>(() => {});
   /** 是否允许向服务端发送音频（严格轮流） */
   const canCaptureRef = useRef(true);
-  const sendMessageRef = useRef<(msg: object) => boolean>(() => false);
+  const sendMessageRef = useRef<(msg: Record<string, unknown>) => boolean>(() => false);
+  /** 是否已完成「服务端状态 ↔ 本地偏好」的首次同步 */
+  const engineSyncDoneRef = useRef(false);
+  /** 麦克风是否正在采集（供 WS 回调读取最新值） */
+  const isRecordingRef = useRef(false);
+  /** 云端 PCM 是否正在播放（用于判断是否需要兜底恢复收音） */
+  const pcmActiveRef = useRef(false);
 
   // 唯一稳定 key — 当前 streaming 的 turn 的 id
   const pendingTurnIdRef = useRef<string>("");
@@ -159,6 +181,20 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
     });
     setTurnPhase("listening");
   }, [session.sessionId]);
+
+  // ---- 云端语音 PCM 播放（24kHz pcm16，WebAudio 直通） ----
+  const { push: pushPcmAudio, clear: clearPcmAudio } = usePcmPlayer({
+    sampleRate: 24000,
+    onStart: () => {
+      pcmActiveRef.current = true;
+      setMutedRef.current(true);
+      setIsAiSpeaking(true);
+    },
+    onEnd: () => {
+      pcmActiveRef.current = false;
+      finishSpeaking();
+    },
+  });
 
   const playNextBrowserSpeech = useCallback(() => {
     if (
@@ -273,7 +309,9 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
       audioRef.current.onended = null;
       audioRef.current = null;
     }
-  }, []);
+    // 云端 PCM 播放队列一并清空（切轮时避免上一轮残留）
+    clearPcmAudio();
+  }, [clearPcmAudio]);
 
   const enqueueAudio = useCallback((base64Payload: string) => {
     ttsReceivedRef.current = true;
@@ -288,6 +326,20 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
     audioQueueRef.current.push(base64Payload);
     playNextInQueue();
   }, [playNextInQueue]);
+
+  /** 云端语音（pcm16）分发：停止浏览器朗读，交给 WebAudio 播放器 */
+  const enqueuePcmAudio = useCallback((base64Payload: string) => {
+    ttsReceivedRef.current = true;
+    browserTtsStartedRef.current = true;
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+    if (speakFallbackTimerRef.current) {
+      clearTimeout(speakFallbackTimerRef.current);
+      speakFallbackTimerRef.current = null;
+    }
+    pushPcmAudio(base64Payload);
+  }, [pushPcmAudio]);
 
   // ---- 展示会话提示条，默认 5 秒后自动消失 ----
   const showSessionNotice = useCallback(
@@ -388,6 +440,18 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
           setStreamingTurnId(null);
           pendingTurnIdRef.current = "";
           // 朗读仅由 tts.audio.delta 或 tts.unavailable 触发一次
+          // 云端引擎可能只回文本没有音频：稍后若仍无音频播放，兜底恢复收音
+          if (voiceEngineRef.current === "volcengine") {
+            window.setTimeout(() => {
+              if (
+                !pcmActiveRef.current &&
+                !isPlayingQueueRef.current &&
+                !isBrowserSpeakingRef.current
+              ) {
+                finishSpeaking();
+              }
+            }, 1800);
+          }
           break;
         }
 
@@ -395,7 +459,73 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
           if (activeTtsTurnIdRef.current && msg.turnId !== activeTtsTurnIdRef.current) {
             break;
           }
-          enqueueAudio(msg.payload);
+          // pcm16（云端全双工）走 WebAudio，mp3（本地 EdgeTTS）走 <audio>
+          if (msg.codec === "pcm16") {
+            enqueuePcmAudio(msg.payload);
+          } else {
+            enqueueAudio(msg.payload);
+          }
+          break;
+        }
+
+        case "voice.engine.state": {
+          const available =
+            typeof msg.available === "boolean" ? msg.available : cloudAvailable;
+          if (typeof msg.available === "boolean") {
+            setCloudAvailable(msg.available);
+            if (!msg.available) setCloudReason(msg.reason || "");
+          }
+
+          // 首次同步：服务端默认引擎与本地偏好不一致时，主动发起一次切换
+          if (!engineSyncDoneRef.current) {
+            engineSyncDoneRef.current = true;
+            let stored: string | null = null;
+            try {
+              stored = localStorage.getItem(VOICE_ENGINE_STORAGE_KEY);
+            } catch {
+              stored = null;
+            }
+            const storedEngine: VoiceEngineId | null =
+              stored === "local" || stored === "volcengine" ? stored : null;
+            if (
+              storedEngine &&
+              storedEngine !== msg.voiceEngine &&
+              (storedEngine === "local" || available)
+            ) {
+              voiceEngineRef.current = storedEngine;
+              setVoiceEngine(storedEngine);
+              setEngineSwitching(true);
+              sendMessageRef.current({
+                type: "control.voice_engine",
+                sessionId: session.sessionId,
+                voiceEngine: storedEngine,
+              });
+              break;
+            }
+          }
+
+          voiceEngineRef.current = msg.voiceEngine;
+          setVoiceEngine(msg.voiceEngine);
+          setEngineSwitching(false);
+          try {
+            localStorage.setItem(VOICE_ENGINE_STORAGE_KEY, msg.voiceEngine);
+          } catch {
+            // localStorage 不可用时忽略
+          }
+          if (msg.reason) {
+            showSessionNotice("warning", msg.reason, {
+              title: t("voice.engine.fallbackTitle"),
+              autoHideMs: 6000,
+            });
+          }
+          // 云端引擎生效后同步一次麦克风状态，避免服务端收不到音频而超时
+          if (msg.voiceEngine === "volcengine") {
+            sendMessageRef.current({
+              type: "control.listening",
+              sessionId: session.sessionId,
+              listening: isRecordingRef.current,
+            });
+          }
           break;
         }
 
@@ -480,7 +610,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
         }
       }
     },
-    [applyTurnPhase, enqueueAudio, enqueueBrowserSpeech, finishSpeaking, navigateToReport, resetTurnAudio, showSessionNotice, t]
+    [applyTurnPhase, enqueueAudio, enqueuePcmAudio, enqueueBrowserSpeech, finishSpeaking, navigateToReport, resetTurnAudio, showSessionNotice, t, cloudAvailable]
   );
 
   // ---- WebSocket ----
@@ -513,6 +643,8 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
         sessionId: session.sessionId,
       });
     }, [session.sessionId]),
+    // 云端全双工引擎依赖连续音频流，关闭 RMS 静音门限
+    silenceGate: voiceEngine === "local",
     onAudioChunk: useCallback(
       (base64Pcm: string, sequenceId: number) => {
         if (!canCaptureRef.current) return;
@@ -530,7 +662,67 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
       [session.sessionId]
     ),
   });
-  setMutedRef.current = setMuted;
+
+  // 云端引擎下，播放期间停止上行音频必须显式告知服务端，否则会触发空闲超时
+  const applyMicGate = useCallback(
+    (muted: boolean) => {
+      setMuted(muted);
+      if (voiceEngineRef.current === "volcengine") {
+        sendMessage({
+          type: "control.listening",
+          sessionId: session.sessionId,
+          listening: !muted,
+        });
+      }
+    },
+    [setMuted, sendMessage, session.sessionId]
+  );
+  setMutedRef.current = applyMicGate;
+  isRecordingRef.current = isRecording;
+
+  // ---- 语音引擎：可用性探测（REST） ----
+  useEffect(() => {
+    let cancelled = false;
+    fetchVoiceEngines().then((data) => {
+      if (cancelled || !data) return;
+      const cloud = data.voiceEngines.find((item) => item.id === "volcengine");
+      setCloudAvailable(Boolean(cloud?.available));
+      setCloudReason(cloud?.available ? "" : cloud?.reason || "");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // ---- 语音引擎：切换（本地 / 云端） ----
+  const switchVoiceEngine = useCallback(
+    (engine: VoiceEngineId) => {
+      if (engine === voiceEngineRef.current || engineSwitching) return;
+      if (engine === "volcengine" && !cloudAvailable) return;
+      setEngineSwitching(true);
+      setVoiceEngine(engine);
+      voiceEngineRef.current = engine;
+      try {
+        localStorage.setItem(VOICE_ENGINE_STORAGE_KEY, engine);
+      } catch {
+        // localStorage 不可用时忽略
+      }
+      // 清空上一轮残留音频，避免两种音色混播
+      resetTurnAudio();
+      sendMessage({
+        type: "control.voice_engine",
+        sessionId: session.sessionId,
+        voiceEngine: engine,
+      });
+      // 云端引擎需要知道麦克风是否在采集（未采集则保持 mute，避免空闲超时）
+      sendMessage({
+        type: "control.listening",
+        sessionId: session.sessionId,
+        listening: isRecordingRef.current,
+      });
+    },
+    [cloudAvailable, engineSwitching, resetTurnAudio, sendMessage, session.sessionId]
+  );
 
   // ---- 发送文本 ----
   const sendTextMessage = useCallback(() => {
@@ -575,10 +767,12 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
     if (isRecording) {
       stopRecording();
       setVoiceReady(false);
+      sendMessage({ type: "control.listening", sessionId: session.sessionId, listening: false });
     } else {
       setInputMode("voice");
       setVoiceReady(false);
       micPrepStartRef.current = Date.now();
+      sendMessage({ type: "control.listening", sessionId: session.sessionId, listening: true });
       try {
         await startRecording();
         // startRecording 成功后 micStatus 会变为 "active"
@@ -588,7 +782,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
         setVoiceReady(false);
       }
     }
-  }, [isRecording, startRecording, stopRecording]);
+  }, [isRecording, startRecording, stopRecording, sendMessage, session.sessionId]);
 
   // ---- 结束 ----
   const handleEndSession = useCallback(() => {
@@ -619,18 +813,20 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
     if (isRecording) stopRecording();
     setVoiceReady(false);
     setInputMode("text");
-  }, [isRecording, stopRecording]);
+    sendMessage({ type: "control.listening", sessionId: session.sessionId, listening: false });
+  }, [isRecording, stopRecording, sendMessage, session.sessionId]);
 
   const switchToVoice = useCallback(async () => {
     setInputMode("voice");
     setVoiceReady(false);
     micPrepStartRef.current = Date.now();
+    sendMessage({ type: "control.listening", sessionId: session.sessionId, listening: true });
     try {
       await startRecording();
     } catch {
       setVoiceReady(false);
     }
-  }, [startRecording]);
+  }, [startRecording, sendMessage, session.sessionId]);
 
   // ---- 麦克风就绪状态同步 + 5 秒超时降级 ----
   useEffect(() => {
@@ -874,7 +1070,7 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
 
           <div className="mx-auto max-w-5xl">
           <div className="mb-3 flex items-center justify-between">
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <div className="flex gap-1.5 rounded-full bg-zinc-100 p-0.5">
               <button onClick={switchToText}
                 className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all ${
@@ -888,6 +1084,57 @@ export default function VoiceSessionPanel({ session }: VoiceSessionPanelProps) {
                     ? "bg-white text-indigo-600 shadow-sm"
                     : "text-zinc-500 hover:text-zinc-700"
                 }`}>{t("voice.audioMode")}</button>
+              </div>
+              {/* 语音引擎选择：本地管线 / 豆包云端全双工 */}
+              <div className="flex flex-col gap-0.5">
+                <span className="text-[10px] font-medium text-zinc-400">
+                  {t("voice.engine.label")}
+                </span>
+                <div className="flex gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => switchVoiceEngine("local")}
+                    disabled={engineSwitching}
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed ${
+                      voiceEngine === "local"
+                        ? "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/40 dark:text-indigo-300"
+                        : "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400"
+                    }`}
+                  >
+                    {t("voice.engine.local")}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => switchVoiceEngine("volcengine")}
+                    disabled={!cloudAvailable || engineSwitching}
+                    title={
+                      cloudAvailable
+                        ? t("voice.engine.cloudHint")
+                        : cloudReason || t("voice.engine.cloudUnavailable")
+                    }
+                    className={`rounded-full px-3 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed ${
+                      voiceEngine === "volcengine"
+                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300"
+                        : cloudAvailable
+                          ? "bg-zinc-100 text-zinc-500 hover:bg-zinc-200 dark:bg-zinc-800 dark:text-zinc-400"
+                          : "bg-zinc-100 text-zinc-300 dark:bg-zinc-800 dark:text-zinc-600"
+                    }`}
+                  >
+                    {engineSwitching && voiceEngine === "volcengine"
+                      ? t("voice.engine.switching")
+                      : t("voice.engine.cloud")}
+                  </button>
+                </div>
+                {voiceEngine === "volcengine" && (
+                  <p className="text-[10px] leading-snug text-emerald-600 dark:text-emerald-400">
+                    {t("voice.engine.cloudActive")}
+                  </p>
+                )}
+                {!cloudAvailable && cloudReason && (
+                  <p className="max-w-[200px] text-[10px] leading-snug text-zinc-400">
+                    {cloudReason}
+                  </p>
+                )}
               </div>
               {/* 实时轻纠正开关 */}
               <div className="flex flex-col gap-0.5">

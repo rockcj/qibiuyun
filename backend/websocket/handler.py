@@ -27,6 +27,7 @@ from services.realtime.pronunciation_agent import pronunciation_agent
 from services.realtime import analysis_store
 from services.tts_service import tts_service
 from services.storage_service import storage_service
+from services.volcengine import DuplexError, DuplexEventBridge, VolcengineDuplexSession
 
 
 # 句末标点分句（用于 LLM 流式输出时增量 TTS，仅整句切分避免重复朗读）
@@ -125,6 +126,14 @@ class SessionState:
         # 已达 max 上限时只打一次日志，避免刷屏
         self._max_split_logged: bool = False
 
+        # ---- 语音引擎（本地管线 / 火山引擎云端全双工） ----
+        self.voice_engine: str = self._resolve_voice_engine()
+        self.duplex: Optional[VolcengineDuplexSession] = None
+        self.duplex_bridge: Optional[DuplexEventBridge] = None
+        self.duplex_task: Optional[asyncio.Task] = None
+        # 云端会话建立/关闭互斥，避免并发重复建连
+        self.duplex_lock: asyncio.Lock = asyncio.Lock()
+
     def effective_vad_silence_ms(self) -> int:
         """缓冲较长时放宽句中停顿判定，支持长段回答。"""
         buf_ms = len(self.audio_buffer) / 32
@@ -139,6 +148,22 @@ class SessionState:
             and not self.is_processing
             and not self.is_tts_active
         )
+
+    def _resolve_voice_engine(self) -> str:
+        """归一化语音引擎：仅允许 local / volcengine，云端不可用时回落本地。"""
+        raw = self.scene_config.get("voiceEngine") or settings.voice_engine_default
+        engine = str(raw).strip().lower()
+        if engine not in ("local", "volcengine"):
+            engine = "local"
+        if engine == "volcengine" and not settings.volcengine_speech_available:
+            print("[WS] Volcengine voice engine requested but not configured, using local")
+            engine = "local"
+        return engine
+
+    def next_turn_id(self) -> str:
+        """生成下一个轮次 id。"""
+        self.turn_count += 1
+        return f"turn_{self.turn_count:03d}"
 
     def add_to_history(self, role: str, content: str) -> None:
         self.history.append({"role": role, "content": content})
@@ -245,6 +270,18 @@ class ConnectionManager:
         })
 
         await self._set_turn_phase(session_id, state, "listening")
+        # 同步语音引擎状态（前端据此决定是否展示云端选项）
+        await self.send_message(session_id, {
+            "type": "voice.engine.state",
+            "sessionId": session_id,
+            "voiceEngine": state.voice_engine,
+            "available": settings.volcengine_speech_available,
+            "defaultEngine": settings.voice_engine_default,
+        })
+
+        # 会话默认引擎即云端时，提前建立云端会话（不阻塞接收循环）
+        if state.voice_engine == "volcengine":
+            asyncio.create_task(self._start_duplex(session_id, state))
 
         print(f"[WS] Client connected: {session_id} (total: {self.active_connections})")
 
@@ -263,6 +300,7 @@ class ConnectionManager:
         if state:
             # 断开前上传整场录音（用户未点结束直接离开页面时）
             await self._upload_session_full_audio(state)
+            await self._stop_duplex(state)
             # 保存会话状态到 Redis
             await self._save_session_state(state)
             duration = time.time() - state.connected_at
@@ -308,11 +346,11 @@ class ConnectionManager:
         elif msg_type == "control.correction":
             return await self._handle_correction_toggle(session_id, state, message)
 
+        elif msg_type == "control.voice_engine":
+            return await self._handle_voice_engine(session_id, state, message)
+
         elif msg_type == "control.listening":
-            # 前端 TTS 播完后的确认，恢复可录音状态
-            if not state.is_processing and not state.is_tts_active:
-                await self._set_turn_phase(session_id, state, "listening")
-            return {"ack": "listening"}
+            return await self._handle_listening(session_id, state, message)
 
         elif msg_type == "ping":
             # 心跳时检查积压音频 + 不活动超时
@@ -355,6 +393,11 @@ class ConnectionManager:
         self, session_id: str, state: SessionState, message: dict
     ) -> dict:
         """处理 audio.input：累积音频 → 停顿检测 → 触发 ASR。"""
+        # 云端全双工引擎：音频直接中继给火山引擎（云端自行判断说话/打断），
+        # 不受本地轮次状态机限制
+        if state.voice_engine == "volcengine" and message.get("payload"):
+            return await self._handle_duplex_audio(session_id, state, message)
+
         # AI 处理/播报期间拒收音频，保证轮流对话
         if not state.accepts_user_audio():
             return {"ack": "audio.ignored", "phase": state.turn_phase}
@@ -529,6 +572,225 @@ class ConnectionManager:
                 pass
 
         state._turn_finalize_task = asyncio.create_task(_confirm_and_trigger())
+    # ------------------------------------------------------------------
+    # 云端全双工语音引擎（火山引擎 · 豆包 Seeduplex）
+    # ------------------------------------------------------------------
+    async def _handle_duplex_audio(
+        self, session_id: str, state: SessionState, message: dict
+    ) -> dict:
+        """audio.input 在云端引擎下的处理：不做本地 VAD，直接中继 PCM。"""
+        payload = message.get("payload", "")
+        if not payload:
+            return {"error": "Empty audio payload"}
+
+        pcm_bytes = asr_service.decode_base64_pcm(payload)
+        if not pcm_bytes:
+            return {"error": "Invalid audio payload"}
+
+        state.last_activity = time.time()
+
+        if state.duplex is None or not state.duplex.connected:
+            if not await self._start_duplex(session_id, state):
+                return {"ack": "audio.dropped", "reason": "cloud_engine_unavailable"}
+        if state.duplex is None:
+            return {"ack": "audio.dropped", "reason": "cloud_engine_unavailable"}
+
+        try:
+            await state.duplex.send_audio(pcm_bytes)
+        except Exception as exc:
+            print(f"[VOLC] send_audio failed {session_id[:8]}: {exc}")
+            return {"ack": "audio.failed", "reason": str(exc)}
+
+        seq = message.get("sequenceId", 0)
+        if seq % 50 == 1:
+            print(f"[VOLC] audio.input #{seq} -> cloud ({len(pcm_bytes)}b) {session_id[:8]}")
+        return {"ack": "audio.received"}
+
+    async def _start_duplex(self, session_id: str, state: SessionState) -> bool:
+        """建立云端全双工会话（幂等），失败时回落到本地引擎。"""
+        async with state.duplex_lock:
+            if state.duplex is not None and state.duplex.connected:
+                return True
+            if not settings.volcengine_speech_available:
+                await self._fallback_to_local(session_id, state, "未配置云端语音（VOLCENGINE_SPEECH_API_KEY）")
+                return False
+
+            instructions = state.system_prompt or self._default_cloud_instructions()
+            session = VolcengineDuplexSession.from_settings(instructions=instructions)
+            try:
+                await session.connect()
+            except DuplexError as exc:
+                print(f"[VOLC] connect failed {session_id[:8]}: {exc}")
+                await self._fallback_to_local(session_id, state, str(exc))
+                return False
+            except Exception as exc:  # 兜底，避免打断音频链路
+                print(f"[VOLC] connect error {session_id[:8]}: {exc}")
+                await self._fallback_to_local(session_id, state, str(exc))
+                return False
+
+            state.duplex = session
+            state.duplex_bridge = DuplexEventBridge(
+                session_id, new_turn_id=state.next_turn_id
+            )
+            state.duplex_task = asyncio.create_task(
+                self._pump_duplex_events(session_id, state, session)
+            )
+            print(f"[VOLC] duplex engine ready {session_id[:8]}")
+            return True
+
+    async def _fallback_to_local(
+        self, session_id: str, state: SessionState, reason: str
+    ) -> None:
+        """云端不可用 → 切回本地管线并通知前端。"""
+        state.voice_engine = "local"
+        await self.send_message(session_id, {
+            "type": "voice.engine.state",
+            "sessionId": session_id,
+            "voiceEngine": "local",
+            "available": False,
+            "reason": reason,
+        })
+        await self.send_message(session_id, {
+            "type": "error",
+            "sessionId": session_id,
+            "message": f"云端语音不可用，已切换到本地语音：{reason}",
+        })
+
+    @staticmethod
+    def _default_cloud_instructions() -> str:
+        return (
+            "You are an English speaking coach playing a realistic interviewer. "
+            "Speak natural, concise English (2-4 sentences per turn), ask one "
+            "follow-up question at a time, and never switch to Chinese."
+        )
+
+    async def _stop_duplex(self, state: SessionState) -> None:
+        """关闭云端会话并清理后台任务。"""
+        async with state.duplex_lock:
+            session = state.duplex
+            task = state.duplex_task
+            state.duplex = None
+            state.duplex_task = None
+            state.duplex_bridge = None
+            if task is not None and not task.done():
+                task.cancel()
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+            if session is not None:
+                await session.close()
+
+    async def _pump_duplex_events(
+        self, session_id: str, state: SessionState, session: VolcengineDuplexSession
+    ) -> None:
+        """消费云端下行事件：桥接为既有协议 + 触发异步语法分析。"""
+        bridge = state.duplex_bridge
+        last_user_text: Optional[str] = None
+        try:
+            async for event in session.events():
+                state.last_activity = time.time()
+                out = bridge.handle(event)
+
+                for msg in out.messages:
+                    await self.send_message(session_id, msg)
+
+                if out.transcript_final:
+                    last_user_text = out.transcript_final
+                    state.last_user_text = out.transcript_final
+                    state.last_user_text_time = time.time()
+                    state.last_interaction_time = time.time()
+                    state._inactivity_prompt_sent = False
+                    state._inactivity_prompt_at = 0.0
+                    asyncio.create_task(
+                        self._run_async_analysis(
+                            session_id, state, out.transcript_final,
+                            out.turn_id or "", audio_data=None, confidence=1.0,
+                        )
+                    )
+
+                if out.response_text:
+                    if last_user_text:
+                        state.add_to_history("user", last_user_text)
+                        last_user_text = None
+                    state.add_to_history("assistant", out.response_text)
+                    state.last_interaction_time = time.time()
+
+                if out.error:
+                    print(f"[VOLC] server error {session_id[:8]}: {out.error}")
+                    await self.send_message(session_id, {
+                        "type": "error",
+                        "sessionId": session_id,
+                        "message": f"云端语音错误：{out.error}",
+                    })
+
+                if out.closed:
+                    print(f"[VOLC] session closed by server {session_id[:8]}")
+                    break
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[VOLC] pump error {session_id[:8]}: {exc}")
+        finally:
+            if state.duplex is session:
+                state.duplex = None
+                state.duplex_task = None
+                state.duplex_bridge = None
+            # 下游断开时同步关闭 WebSocket（close 幂等）
+            await session.close()
+
+    async def _handle_voice_engine(
+        self, session_id: str, state: SessionState, message: dict
+    ) -> dict:
+        """处理 control.voice_engine：运行时切换本地 / 云端语音引擎。"""
+        raw = message.get("voiceEngine") or message.get("engine") or "local"
+        engine = str(raw).strip().lower()
+        if engine not in ("local", "volcengine"):
+            engine = "local"
+
+        if engine == "local":
+            await self._stop_duplex(state)
+            state.voice_engine = "local"
+            await self.send_message(session_id, {
+                "type": "voice.engine.state",
+                "sessionId": session_id,
+                "voiceEngine": "local",
+                "available": settings.volcengine_speech_available,
+            })
+            return {"ack": "voice.engine.updated", "voiceEngine": "local"}
+
+        if not settings.volcengine_speech_available:
+            await self._fallback_to_local(session_id, state, "未配置云端语音")
+            return {"ack": "voice.engine.unavailable", "voiceEngine": "local"}
+
+        ok = await self._start_duplex(session_id, state)
+        if not ok:
+            return {"ack": "voice.engine.fallback", "voiceEngine": "local"}
+
+        state.voice_engine = "volcengine"
+        # 丢弃本地 VAD 缓冲，避免残留音频被再次当作一轮本地对话
+        state.audio_buffer = bytearray()
+        state.vad.reset()
+        await self.send_message(session_id, {
+            "type": "voice.engine.state",
+            "sessionId": session_id,
+            "voiceEngine": "volcengine",
+            "available": True,
+        })
+        return {"ack": "voice.engine.updated", "voiceEngine": "volcengine"}
+
+    async def _handle_listening(
+        self, session_id: str, state: SessionState, message: dict
+    ) -> dict:
+        """处理 control.listening：麦克风开/关时同步云端会话，并恢复可录音状态。"""
+        listening = bool(message.get("listening", True))
+        # 云端引擎：播放期间停止上行音频需显式告知服务端，避免音频流超时
+        if state.duplex is not None and state.duplex.connected:
+            await state.duplex.set_muted(not listening)
+        # 本地引擎：前端 TTS 播完后的确认，恢复可录音状态
+        if listening and not state.is_processing and not state.is_tts_active:
+            await self._set_turn_phase(session_id, state, "listening")
+        return {"ack": "listening.updated", "listening": listening}
 
     async def _delayed_silence_check(self, session_id: str, state: SessionState) -> None:
         """兼容旧逻辑：延迟检查静音并调度确认。"""
@@ -1203,6 +1465,8 @@ class ConnectionManager:
             "reason": "userFinished",
             "reportStatus": "generating",
         })
+        # 关闭云端语音会话
+        await self._stop_duplex(state)
         # 保存最终状态
         await self._save_session_state(state)
         # 刷入数据库供报告页读取
@@ -1215,6 +1479,9 @@ class ConnectionManager:
     # ------------------------------------------------------------------
     async def _maybe_trigger_turn(self, session_id: str, state: SessionState) -> None:
         """心跳时检查积压音频：停说超过 0.5s 则调度确认触发。"""
+        # 云端引擎的音频不进入本地缓冲，无需本地触发
+        if state.voice_engine == "volcengine":
+            return
         if (
             not state.is_processing
             and len(state.audio_buffer) > 0
@@ -1287,7 +1554,11 @@ class ConnectionManager:
                 "sessionId": session_id,
                 "turnId": "inactivity_prompt",
             })
-            await self._stream_tts(session_id, state, prompt_text, "inactivity_prompt")
+            # 云端引擎用自己的音色播报，保持音色一致
+            if state.duplex is not None and state.duplex.connected:
+                await state.duplex.say(prompt_text)
+            else:
+                await self._stream_tts(session_id, state, prompt_text, "inactivity_prompt")
 
     # ------------------------------------------------------------------
     # 状态持久化

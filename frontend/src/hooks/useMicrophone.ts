@@ -21,6 +21,11 @@ interface UseMicrophoneOptions {
   /** 客户端 VAD 判定用户说完（0.5s 静音） */
   onTurnEnd?: () => void;
   onError?: (error: string) => void;
+  /**
+   * 静音门限：true=低于 RMS 阈值的帧不发送（本地 VAD 依赖静音判断）。
+   * 云端全双工引擎需要连续音频流，应传 false。
+   */
+  silenceGate?: boolean;
 }
 
 interface UseMicrophoneReturn {
@@ -34,7 +39,7 @@ interface UseMicrophoneReturn {
 }
 
 export function useMicrophone(options: UseMicrophoneOptions = {}): UseMicrophoneReturn {
-  const { onAudioChunk, onTurnEnd, onError } = options;
+  const { onAudioChunk, onTurnEnd, onError, silenceGate = true } = options;
 
   const [status, setStatus] = useState<MicStatus>("idle");
   const [isRecording, setIsRecording] = useState(false);
@@ -72,6 +77,10 @@ export function useMicrophone(options: UseMicrophoneOptions = {}): UseMicrophone
   const onTurnEndRef = useRef(onTurnEnd);
   onAudioChunkRef.current = onAudioChunk;
   onTurnEndRef.current = onTurnEnd;
+
+  // 静音门限开关（云端全双工引擎需要连续音频流）
+  const silenceGateRef = useRef(silenceGate);
+  silenceGateRef.current = silenceGate;
 
   // 转为 PCM + 能量检测
   const floatToBase64Pcm = useCallback((floatSamples: Float32Array): { base64: string; rms: number } => {
@@ -122,6 +131,13 @@ export function useMicrophone(options: UseMicrophoneOptions = {}): UseMicrophone
         copy.set(inputData);
         const { base64, rms } = floatToBase64Pcm(copy);
         const isSpeech = rms >= PCM_CONFIG.rmsThreshold;
+
+        // 云端全双工引擎需要连续音频流：不依赖本地 VAD，静音帧也照常上行
+        if (!silenceGateRef.current) {
+          sequenceRef.current += 1;
+          onAudioChunkRef.current?.(base64, sequenceRef.current);
+          return;
+        }
 
         let shouldSend = false;
 

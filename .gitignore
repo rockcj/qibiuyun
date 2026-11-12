@@ -34,3 +34,6 @@ out/
 .DS_Store
 Thumbs.db
 backend/.env
+
+# 运行期上传文件（简历原文/PDF 等，含个人隐私，不入库）
+backend/storage/

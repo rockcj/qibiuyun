@@ -21,7 +21,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from config import settings
 from database import init_db
 from exceptions import ApiError, api_error_handler, http_exception_handler, validation_exception_handler
-from routers import scenes, interviews, resumes, jobs, auth
+from routers import scenes, interviews, resumes, jobs, auth, voices
 from services.asr_service import asr_service
 from services.cache_service import cache
 from websocket.handler import ws_manager
@@ -80,6 +80,7 @@ app.include_router(resumes.router)
 app.include_router(jobs.router)
 app.include_router(interviews.router)
 app.include_router(auth.router)
+app.include_router(voices.router)
 
 
 # ---------------------------------------------------------------------------

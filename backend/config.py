@@ -111,6 +111,38 @@ class Settings(BaseSettings):
     # 默认关闭服务端 Edge TTS，由前端浏览器 speechSynthesis 朗读（更低延迟）
     enable_server_tts: bool = False
 
+    # ---- 云端语音引擎（火山引擎 · 豆包端到端实时语音 Seeduplex）----
+    # 语音引擎默认值：local（本地 Whisper + LLM + EdgeTTS 管线）/ volcengine（豆包云端）
+    voice_engine_default: str = "local"
+    volcengine_speech_enabled: bool = True
+    # 新版控制台 API Key（X-Api-Key），与 TOS 的 AK/SK 不是同一套凭证
+    volcengine_speech_api_key: str = ""
+    # 可选 App ID（X-Api-App-Id），部分账号需要
+    volcengine_speech_app_id: str = ""
+    volcengine_speech_ws_url: str = (
+        "wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue"
+    )
+    # 可选 Resource ID（X-Api-Resource-Id），留空则不带该请求头
+    volcengine_speech_resource_id: str = ""
+    # 全双工版本模型固定值
+    volcengine_speech_model: str = "1.2.6.1"
+    # 音色：需与账号已开通音色一致（控制台「音色列表」），英文练习建议使用英文音色
+    volcengine_speech_voice: str = "zh_female_vv_jupiter_bigtts"
+    # 语速 [-50, 100]，0 为默认，100 为 2 倍速
+    volcengine_speech_speed: int = 0
+    volcengine_speech_connect_timeout_sec: float = 10.0
+    # 可选：覆盖 session.create 的 session 对象（整段 JSON），用于透传 extension 等高级参数
+    volcengine_speech_session_json: str = ""
+
+    @property
+    def volcengine_speech_available(self) -> bool:
+        """云端语音引擎是否可用（开启 + 已配置 API Key）。"""
+        return bool(
+            self.volcengine_speech_enabled
+            and self.volcengine_speech_api_key.strip()
+            and self.volcengine_speech_ws_url.strip()
+        )
+
     # ---- 发音/语法分析 ----
     pronunciation_low_confidence_threshold: float = 0.6
     pause_silence_ms: int = 300

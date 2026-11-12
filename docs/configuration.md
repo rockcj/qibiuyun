@@ -116,6 +116,28 @@
 | `AI_PROVIDER_TIMEOUT_SECONDS` | 是                 | `20`                        | AI 服务调用超时时间                              |
 
 
+### 1.4.1 云端语音引擎（可选，火山引擎豆包端到端实时语音）
+
+语音区域现在提供「本地语音 / 豆包实时语音」两个选项。云端引擎走火山引擎「端到端实时语音
+（Seeduplex 全双工）」，需要在后端配置以下变量；未配置时前端选项置灰并自动使用本地管线。
+完整说明见 `docs/voice-engines.md`。
+
+| 变量名 | 是否必填 | 示例值 | 说明 |
+| --- | --- | --- | --- |
+| `VOICE_ENGINE_DEFAULT` | 否 | `local` | 新会话默认语音引擎：`local` / `volcengine` |
+| `VOLCENGINE_SPEECH_ENABLED` | 否 | `true` | 设为 `false` 可整体禁用云端选项 |
+| `VOLCENGINE_SPEECH_API_KEY` | 启用云端时必填 | 空 | 豆包语音新版控制台 API Key（`X-Api-Key`），**不是 TOS 的 AK/SK** |
+| `VOLCENGINE_SPEECH_APP_ID` | 否 | 空 | 可选 App ID（`X-Api-App-Id`） |
+| `VOLCENGINE_SPEECH_WS_URL` | 否 | `wss://openspeech.bytedance.com/api/v3/duplex/realtime/dialogue` | 全双工 WebSocket 地址 |
+| `VOLCENGINE_SPEECH_RESOURCE_ID` | 否 | 空 | 可选 Resource ID（`X-Api-Resource-Id`） |
+| `VOLCENGINE_SPEECH_MODEL` | 否 | `1.2.6.1` | 全双工版本固定模型名 |
+| `VOLCENGINE_SPEECH_VOICE` | 否 | `zh_female_vv_jupiter_bigtts` | 音色名，英文练习请填英文音色 |
+| `VOLCENGINE_SPEECH_SPEED` | 否 | `0` | 语速 `[-50, 100]` |
+| `VOLCENGINE_SPEECH_SESSION_JSON` | 否 | 空 | 深度覆盖 `session.create` 的 `session` 对象（透传 extension 等） |
+
+自检命令：`python backend/scripts/check_volcengine_duplex.py --live`。
+
+
 ### 1.5 前端配置
 
 

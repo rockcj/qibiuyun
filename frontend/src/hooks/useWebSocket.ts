@@ -24,7 +24,8 @@ interface UseWebSocketOptions {
 
 interface UseWebSocketReturn {
   status: ConnectionStatus;
-  sendMessage: (msg: Record<string, unknown>) => void;
+  /** 返回是否成功发送（连接未就绪时返回 false） */
+  sendMessage: (msg: Record<string, unknown>) => boolean;
   connect: () => void;
   disconnect: () => void;
   error: string | null;
